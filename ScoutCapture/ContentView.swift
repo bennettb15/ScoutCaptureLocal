@@ -9007,7 +9007,16 @@ extension ContentView {
         let originalsRoot = exportRoot.appendingPathComponent("Originals", isDirectory: true)
         try fileManager.createDirectory(at: originalsRoot, withIntermediateDirectories: true)
 
-        var expectedPaths = Set(["session.json", "validation.txt", "Originals/"])
+        var expectedPaths = Set([
+            "session.json",
+            "validation.txt",
+            "sessions.csv",
+            "shots.csv",
+            "issues.csv",
+            "issue_history.csv",
+            "guided_rows.csv",
+            "Originals/"
+        ])
         for (index, asset) in assets.enumerated() {
             guard let data = requestSessionExportImageData(for: asset) else { continue }
             let filename = sessionExportFilename(for: asset, index: index + 1)
@@ -9022,6 +9031,9 @@ extension ContentView {
         }
         try exportArtifacts.sessionData.write(to: exportRoot.appendingPathComponent("session.json"), options: .atomic)
         try exportArtifacts.validationData.write(to: exportRoot.appendingPathComponent("validation.txt"), options: .atomic)
+        for csvFile in localStore.exportCSVFiles(for: exportArtifacts.metadata) {
+            try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
+        }
         progress?(.originals)
 
 #if DEBUG
@@ -12192,6 +12204,9 @@ extension ContentView {
 #endif
             try exportArtifacts.sessionData.write(to: exportRoot.appendingPathComponent("session.json"), options: .atomic)
             try exportArtifacts.validationData.write(to: exportRoot.appendingPathComponent("validation.txt"), options: .atomic)
+            for csvFile in localStore.exportCSVFiles(for: exportArtifacts.metadata) {
+                try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
+            }
             
             for (index, asset) in assets.enumerated() {
                 guard let imageData = requestOriginalImageData(for: asset) else { continue }

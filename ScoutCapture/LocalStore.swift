@@ -26,6 +26,7 @@ final class LocalStore {
     }
 
     struct ValidatedSessionExportArtifacts {
+        let metadata: SessionMetadata
         let sessionData: Data
         let validationData: Data
         let prewritePassed: Bool
@@ -225,11 +226,251 @@ final class LocalStore {
         )
 
         return ValidatedSessionExportArtifacts(
+            metadata: exportObjectPost,
             sessionData: sessionData,
             validationData: validationData,
             prewritePassed: validationReportPre.passed,
             postwritePassed: validationReportPost.passed
         )
+    }
+
+    func exportCSVFiles(for metadata: SessionMetadata) -> [(filename: String, data: Data)] {
+        [
+            ("sessions.csv", Data(buildSessionsCSV(metadata: metadata).utf8)),
+            ("shots.csv", Data(buildShotsCSV(metadata: metadata).utf8)),
+            ("issues.csv", Data(buildIssuesCSV(metadata: metadata).utf8)),
+            ("issue_history.csv", Data(buildIssueHistoryCSV(metadata: metadata).utf8)),
+            ("guided_rows.csv", Data(buildGuidedRowsCSV(metadata: metadata).utf8))
+        ]
+    }
+
+    private func buildSessionsCSV(metadata: SessionMetadata) -> String {
+        let headers = [
+            "session_id",
+            "property_id",
+            "property_name",
+            "property_address",
+            "started_at_utc",
+            "ended_at_utc",
+            "is_baseline",
+            "status",
+            "schema_version",
+            "app_version",
+            "time_zone"
+        ]
+
+        let row = [
+            metadata.sessionID.uuidString,
+            metadata.propertyID.uuidString,
+            metadata.propertyNameAtExport ?? metadata.propertyNameAtCapture ?? "",
+            metadata.propertyAddressAtCapture ?? "",
+            iso8601String(metadata.startedAt),
+            iso8601String(metadata.endedAt),
+            boolString(metadata.isBaselineSession),
+            metadata.status.rawValue,
+            String(metadata.schemaVersion),
+            metadata.appVersion,
+            metadata.timeZoneIdentifierAtCapture
+        ]
+        return csvString(headers: headers, rows: [row])
+    }
+
+    private func buildShotsCSV(metadata: SessionMetadata) -> String {
+        let headers = [
+            "shot_id",
+            "session_id",
+            "property_id",
+            "building",
+            "elevation",
+            "detail_type",
+            "angle_index",
+            "shot_key",
+            "capture_kind",
+            "is_flagged",
+            "is_guided",
+            "issue_id",
+            "captured_at_utc",
+            "latitude",
+            "longitude",
+            "lens",
+            "original_filename",
+            "original_byte_size"
+        ]
+
+        let rows = metadata.shots.map { shot in
+            [
+                shot.shotID.uuidString,
+                metadata.sessionID.uuidString,
+                metadata.propertyID.uuidString,
+                shot.building,
+                shot.elevation,
+                shot.detailType,
+                String(max(1, shot.angleIndex)),
+                shot.shotKey,
+                normalizedCaptureKind(for: shot),
+                boolString(shot.isFlagged),
+                boolString(shot.isGuided),
+                shot.issueID?.uuidString ?? "",
+                iso8601String(shot.createdAt),
+                decimalString(shot.latitude),
+                decimalString(shot.longitude),
+                shot.lens ?? "",
+                shot.originalFilename,
+                intString(shot.originalByteSize)
+            ]
+        }
+
+        return csvString(headers: headers, rows: rows)
+    }
+
+    private func buildIssuesCSV(metadata: SessionMetadata) -> String {
+        let headers = [
+            "issue_id",
+            "property_id",
+            "first_seen_session_id",
+            "last_capture_session_id",
+            "current_status",
+            "current_reason",
+            "previous_reason",
+            "first_seen_at_utc",
+            "last_seen_at_utc",
+            "resolved_at_utc",
+            "shot_key"
+        ]
+
+        let rows = metadata.issues.map { issue in
+            let firstSeenSessionId = issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.first?.sessionId?.uuidString ?? ""
+            return [
+                issue.issueID.uuidString,
+                metadata.propertyID.uuidString,
+                firstSeenSessionId,
+                issue.lastCaptureSessionId?.uuidString ?? "",
+                issue.issueStatus,
+                issue.currentReason ?? "",
+                issue.previousReason ?? "",
+                iso8601String(issue.firstSeenAt),
+                iso8601String(issue.lastSeenAt),
+                iso8601String(issue.resolvedAt),
+                issue.shotKey ?? ""
+            ]
+        }
+
+        return csvString(headers: headers, rows: rows)
+    }
+
+    private func buildIssueHistoryCSV(metadata: SessionMetadata) -> String {
+        let headers = [
+            "event_id",
+            "issue_id",
+            "session_id",
+            "event_type",
+            "timestamp_utc",
+            "field_changed",
+            "old_value",
+            "new_value",
+            "shot_id"
+        ]
+
+        let rows = metadata.issues.flatMap { issue in
+            issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.map { event in
+                let fieldChanged = event.details["field"] ?? ""
+                let oldValue = event.details["oldValue"] ?? event.details["oldReason"] ?? ""
+                let newValue = event.details["newValue"] ?? event.details["newReason"] ?? ""
+                let shotId = event.details["shotId"] ?? event.details["shotID"] ?? ""
+                return [
+                    event.id.uuidString,
+                    issue.issueID.uuidString,
+                    event.sessionId?.uuidString ?? "",
+                    event.type,
+                    iso8601String(event.timestamp),
+                    fieldChanged,
+                    oldValue,
+                    newValue,
+                    shotId
+                ]
+            }
+        }
+
+        return csvString(headers: headers, rows: rows)
+    }
+
+    private func buildGuidedRowsCSV(metadata: SessionMetadata) -> String {
+        let headers = [
+            "guided_row_id",
+            "session_id",
+            "property_id",
+            "building",
+            "elevation",
+            "detail_type",
+            "angle_index",
+            "status",
+            "is_retired",
+            "retired_at",
+            "skip_reason",
+            "skip_session_id"
+        ]
+
+        let rows = metadata.guidedShots.map { row in
+            [
+                row.id.uuidString,
+                metadata.sessionID.uuidString,
+                metadata.propertyID.uuidString,
+                row.building ?? "",
+                row.targetElevation ?? "",
+                row.detailType ?? "",
+                intString(row.angleIndex.map { max(1, $0) }),
+                row.status.rawValue,
+                boolString(row.isRetired),
+                iso8601String(row.retiredAt),
+                row.skipReason?.rawValue ?? "",
+                row.skipSessionID?.uuidString ?? ""
+            ]
+        }
+
+        return csvString(headers: headers, rows: rows)
+    }
+
+    private func normalizedCaptureKind(for shot: ShotMetadata) -> String {
+        if let captureKind = SessionMetadata.trimmedNonEmpty(shot.captureKind) {
+            return captureKind
+        }
+        if shot.isFlagged, let firstCaptureKind = SessionMetadata.trimmedNonEmpty(shot.firstCaptureKind) {
+            return firstCaptureKind
+        }
+        return "captured"
+    }
+
+    private func csvString(headers: [String], rows: [[String]]) -> String {
+        ([headers] + rows)
+            .map { $0.map(csvEscape).joined(separator: ",") }
+            .joined(separator: "\n") + "\n"
+    }
+
+    private func csvEscape(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+        if escaped.contains(",") || escaped.contains("\"") || escaped.contains("\n") || escaped.contains("\r") {
+            return "\"\(escaped)\""
+        }
+        return escaped
+    }
+
+    private func iso8601String(_ date: Date?) -> String {
+        guard let date else { return "" }
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func boolString(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
+    private func intString(_ value: Int?) -> String {
+        guard let value else { return "" }
+        return String(value)
+    }
+
+    private func decimalString(_ value: Double?) -> String {
+        guard let value else { return "" }
+        return String(value)
     }
 
     func performFileIOSync<T>(_ work: () throws -> T) rethrows -> T {

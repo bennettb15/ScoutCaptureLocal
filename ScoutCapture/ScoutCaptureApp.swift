@@ -1314,7 +1314,16 @@ struct SessionHubView: View {
         let exportRoot = try StorageRoot.makeSessionExportRootFolder(propertyID: property.id, sessionID: session.id)
         let originalsRoot = exportRoot.appendingPathComponent("Originals", isDirectory: true)
         try FileManager.default.createDirectory(at: originalsRoot, withIntermediateDirectories: true)
-        var expectedPaths = Set(["session.json", "validation.txt", "Originals/"])
+        var expectedPaths = Set([
+            "session.json",
+            "validation.txt",
+            "sessions.csv",
+            "shots.csv",
+            "issues.csv",
+            "issue_history.csv",
+            "guided_rows.csv",
+            "Originals/"
+        ])
         let sessionMetadata = try localStore.loadSessionMetadata(propertyID: property.id, sessionID: session.id)
 #if DEBUG
         print("Pending export sessionStartedAt: \(sessionMetadata.startedAt)")
@@ -1376,6 +1385,9 @@ struct SessionHubView: View {
         let sessionData = try encoder.encode(payload)
         try sessionData.write(to: exportRoot.appendingPathComponent("session.json"), options: .atomic)
         try validationArtifacts.validationData.write(to: exportRoot.appendingPathComponent("validation.txt"), options: .atomic)
+        for csvFile in localStore.exportCSVFiles(for: validationArtifacts.metadata) {
+            try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
+        }
 #if DEBUG
         print("EXPORT ROOT: \(exportRoot.path)")
         print("EXPORT ROOT FILES: \((try? StorageRoot.exportRootFilenames(exportRoot)) ?? [])")
