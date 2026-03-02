@@ -6477,14 +6477,6 @@ extension ContentView {
     private func armedReferenceActionOverlay() -> some View {
         let items = [
             SharedActionMenuItem(
-                title: "Retake",
-                isEnabled: true,
-                action: {
-                    showArmedReferenceMenu = false
-                    performArmedReferenceRetake()
-                }
-            ),
-            SharedActionMenuItem(
                 title: "View Reference Image",
                 isEnabled: armedReferenceImageLocalIdentifier(isCaptured: false) != nil,
                 action: {
@@ -14615,15 +14607,9 @@ extension ContentView {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(statusColor)
 
-                        (
-                            Text("Reason: ")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.86)) +
-                            Text(reasonText)
-                                .font(.system(size: 12, weight: .regular))
-                                .foregroundColor(.white.opacity(0.86))
-                        )
-                        .lineLimit(2)
+                        Text("\(Text("Reason: ").font(.system(size: 12, weight: .semibold)))\(Text(reasonText).font(.system(size: 12, weight: .regular)))")
+                            .foregroundColor(.white.opacity(0.86))
+                            .lineLimit(2)
                     }
 
                     Spacer(minLength: 0)

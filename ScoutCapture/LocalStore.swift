@@ -249,6 +249,8 @@ final class LocalStore {
             "session_id",
             "property_id",
             "property_name",
+            "client_name",
+            "client_phone",
             "property_address",
             "started_at_utc",
             "ended_at_utc",
@@ -259,10 +261,13 @@ final class LocalStore {
             "time_zone"
         ]
 
+        let property = currentProperty(for: metadata.propertyID)
         let row = [
             metadata.sessionID.uuidString,
             metadata.propertyID.uuidString,
             metadata.propertyNameAtExport ?? metadata.propertyNameAtCapture ?? "",
+            property?.clientName ?? "",
+            metadata.propertyPhoneAtCapture ?? property?.clientPhone ?? "",
             metadata.propertyAddressAtCapture ?? "",
             iso8601String(metadata.startedAt),
             iso8601String(metadata.endedAt),
