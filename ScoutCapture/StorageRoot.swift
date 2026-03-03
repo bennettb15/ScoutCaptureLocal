@@ -152,10 +152,11 @@ enum StorageRoot {
         }
     }
 
-    static func makeSessionExportRootFolder(propertyID: UUID, sessionID: UUID) throws -> URL {
+    static func makeSessionExportRootFolder(propertyFolderName: String, sessionID: UUID) throws -> URL {
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("ScoutCapture-Exports", isDirectory: true)
-            .appendingPathComponent("\(propertyID.uuidString)_\(sessionID.uuidString)", isDirectory: true)
+            .appendingPathComponent(propertyFolderName, isDirectory: true)
+            .appendingPathComponent("\(sessionID.uuidString)", isDirectory: true)
 
         if fileManager.fileExists(atPath: root.path) {
             try fileManager.removeItem(at: root)
@@ -166,7 +167,8 @@ enum StorageRoot {
 
     static func zipEntriesForExportRoot(_ root: URL) throws -> [ExportZipEntry] {
         var entries: [ExportZipEntry] = []
-        try appendZipEntries(in: root, relativeBase: "", to: &entries)
+        let propertyFolderName = root.deletingLastPathComponent().lastPathComponent
+        try appendZipEntries(in: root, relativeBase: propertyFolderName, to: &entries)
         return entries.sorted { $0.path < $1.path }
     }
 

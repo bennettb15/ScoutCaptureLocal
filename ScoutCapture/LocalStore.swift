@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 
 final class LocalStore {
-    private let currentSessionSchemaVersion = 8
+    private let currentSessionSchemaVersion = 9
     private let fileIOQueue = DispatchQueue(label: "ScoutCapture.LocalStore.fileIO")
     private let fileIOQueueKey = DispatchSpecificKey<UInt8>()
     private let fileIOQueueValue: UInt8 = 1
@@ -14,8 +14,10 @@ final class LocalStore {
 
     enum StoreError: Error {
         case propertyNotFound(UUID)
+        case organizationNotFound(UUID)
         case observationNotFound(UUID)
         case sessionNotFound(UUID)
+        case noAvailableFolderID
     }
 
     struct ExportValidationReport {
@@ -40,6 +42,7 @@ final class LocalStore {
     private let activeRootURL: URL
     private let scoutRootURL: URL
     private let propertiesURL: URL
+    private let organizationsURL: URL
     private let propertyFoldersURL: URL
     private let observationsDirectoryURL: URL
     private let guidedShotsDirectoryURL: URL
@@ -62,6 +65,7 @@ final class LocalStore {
         self.activeRootURL = appRoot
         self.scoutRootURL = scoutRoot
         self.propertiesURL = scoutRoot.appendingPathComponent("properties.json")
+        self.organizationsURL = scoutRoot.appendingPathComponent("organizations.json")
         self.propertyFoldersURL = scoutRoot.appendingPathComponent("Properties", isDirectory: true)
         self.observationsDirectoryURL = scoutRoot.appendingPathComponent("observations", isDirectory: true)
         self.guidedShotsDirectoryURL = scoutRoot.appendingPathComponent("guided-shots", isDirectory: true)
@@ -248,10 +252,17 @@ final class LocalStore {
         let headers = [
             "session_id",
             "property_id",
+            "org_id",
+            "org_name",
+            "folder_id",
             "property_name",
-            "client_name",
-            "client_phone",
             "property_address",
+            "propertyStreet",
+            "propertyCity",
+            "propertyState",
+            "propertyZip",
+            "primary_contact_name",
+            "primary_contact_phone",
             "started_at_utc",
             "ended_at_utc",
             "is_baseline",
@@ -262,13 +273,31 @@ final class LocalStore {
         ]
 
         let property = currentProperty(for: metadata.propertyID)
-        let row = [
+        let propertyName = metadata.propertyNameAtExport ?? metadata.propertyNameAtCapture ?? ""
+        let propertyAddress = metadata.propertyAddressAtCapture ?? ""
+        let orgID = metadata.orgID?.uuidString ?? property?.orgId?.uuidString ?? ""
+        let orgName = metadata.orgNameAtCapture ?? property?.orgId.flatMap { organization(withID: $0)?.name } ?? ""
+        let folderID = metadata.folderIDAtCapture ?? property?.folderId ?? ""
+        let primaryContactName = metadata.primaryContactNameAtCapture ?? property?.clientName ?? ""
+        let primaryContactPhone = metadata.propertyPhoneAtCapture ?? property?.clientPhone ?? ""
+        let propertyStreet = metadata.propertyStreetAtCapture ?? property?.street ?? ""
+        let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
+        let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
+        let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
+        let row: [String] = [
             metadata.sessionID.uuidString,
             metadata.propertyID.uuidString,
-            metadata.propertyNameAtExport ?? metadata.propertyNameAtCapture ?? "",
-            property?.clientName ?? "",
-            metadata.propertyPhoneAtCapture ?? property?.clientPhone ?? "",
-            metadata.propertyAddressAtCapture ?? "",
+            orgID,
+            orgName,
+            folderID,
+            propertyName,
+            propertyAddress,
+            propertyStreet,
+            propertyCity,
+            propertyState,
+            propertyZip,
+            primaryContactName,
+            primaryContactPhone,
             iso8601String(metadata.startedAt),
             iso8601String(metadata.endedAt),
             boolString(metadata.isBaselineSession),
@@ -285,6 +314,10 @@ final class LocalStore {
             "shot_id",
             "session_id",
             "property_id",
+            "propertyStreet",
+            "propertyCity",
+            "propertyState",
+            "propertyZip",
             "building",
             "elevation",
             "detail_type",
@@ -302,11 +335,20 @@ final class LocalStore {
             "original_byte_size"
         ]
 
+        let property = currentProperty(for: metadata.propertyID)
+        let propertyStreet = metadata.propertyStreetAtCapture ?? property?.street ?? ""
+        let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
+        let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
+        let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
         let rows = metadata.shots.map { shot in
             [
                 shot.shotID.uuidString,
                 metadata.sessionID.uuidString,
                 metadata.propertyID.uuidString,
+                propertyStreet,
+                propertyCity,
+                propertyState,
+                propertyZip,
                 shot.building,
                 shot.elevation,
                 shot.detailType,
@@ -332,6 +374,10 @@ final class LocalStore {
         let headers = [
             "issue_id",
             "property_id",
+            "propertyStreet",
+            "propertyCity",
+            "propertyState",
+            "propertyZip",
             "first_seen_session_id",
             "last_capture_session_id",
             "current_status",
@@ -343,11 +389,20 @@ final class LocalStore {
             "shot_key"
         ]
 
+        let property = currentProperty(for: metadata.propertyID)
+        let propertyStreet = metadata.propertyStreetAtCapture ?? property?.street ?? ""
+        let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
+        let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
+        let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
         let rows = metadata.issues.map { issue in
             let firstSeenSessionId = issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.first?.sessionId?.uuidString ?? ""
             return [
                 issue.issueID.uuidString,
                 metadata.propertyID.uuidString,
+                propertyStreet,
+                propertyCity,
+                propertyState,
+                propertyZip,
                 firstSeenSessionId,
                 issue.lastCaptureSessionId?.uuidString ?? "",
                 issue.issueStatus,
@@ -404,6 +459,10 @@ final class LocalStore {
             "guided_row_id",
             "session_id",
             "property_id",
+            "propertyStreet",
+            "propertyCity",
+            "propertyState",
+            "propertyZip",
             "building",
             "elevation",
             "detail_type",
@@ -415,11 +474,20 @@ final class LocalStore {
             "skip_session_id"
         ]
 
+        let property = currentProperty(for: metadata.propertyID)
+        let propertyStreet = metadata.propertyStreetAtCapture ?? property?.street ?? ""
+        let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
+        let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
+        let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
         let rows = metadata.guidedShots.map { row in
             [
                 row.id.uuidString,
                 metadata.sessionID.uuidString,
                 metadata.propertyID.uuidString,
+                propertyStreet,
+                propertyCity,
+                propertyState,
+                propertyZip,
                 row.building ?? "",
                 row.targetElevation ?? "",
                 row.detailType ?? "",
@@ -490,29 +558,94 @@ final class LocalStore {
     // MARK: - Properties CRUD
 
     func fetchProperties() throws -> [Property] {
-        try readProperties()
+        try performFileIOSync {
+            try migratedPropertyAndOrganizationState().properties
+        }
+    }
+
+    func fetchOrganizations() throws -> [Organization] {
+        try performFileIOSync {
+            try migratedPropertyAndOrganizationState().organizations
+        }
+    }
+
+    @discardableResult
+    func createOrganization(_ organization: Organization) throws -> Organization {
+        try performFileIOSync {
+            var state = try migratedPropertyAndOrganizationState()
+            let normalizedName = organization.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedName.isEmpty else { return state.organizations.first ?? organization }
+            if let existing = state.organizations.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(normalizedName) == .orderedSame }) {
+                return existing
+            }
+            let created = Organization(id: organization.id, name: normalizedName)
+            state.organizations.append(created)
+            state.organizations = normalizedOrganizations(state.organizations)
+            try writeOrganizations(state.organizations)
+            return created
+        }
+    }
+
+    func exportPropertyFolderName(propertyID: UUID) throws -> String {
+        let properties = try fetchProperties()
+        guard let property = properties.first(where: { $0.id == propertyID }) else {
+            throw StoreError.propertyNotFound(propertyID)
+        }
+        guard let folderNumber = parseFolderNumber(property.folderId) else {
+            throw StoreError.noAvailableFolderID
+        }
+        let folderID = formatFolderID(folderNumber)
+        let safePropertyName = Self.sanitizedExportFolderComponent(property.name)
+        return [folderID, safePropertyName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @discardableResult
     func createProperty(_ property: Property) throws -> Property {
-        var properties = try readProperties()
-        properties.append(property)
-        try writeProperties(properties)
-        return property
+        try performFileIOSync {
+            var state = try migratedPropertyAndOrganizationState()
+            var created = property
+            let validOrgIDs = Set(state.organizations.map(\.id))
+            if created.orgId == nil || (created.orgId.map { !validOrgIDs.contains($0) } ?? false) {
+                created.orgId = defaultOrganization(in: &state.organizations).id
+            }
+            if trimmedNonEmpty(created.folderId) == nil {
+                created.folderId = try nextAvailableFolderID(in: state.properties)
+            }
+            state.properties.append(created)
+            try writeOrganizations(state.organizations)
+            try writeProperties(state.properties)
+            return created
+        }
     }
 
     @discardableResult
     func updateProperty(_ property: Property) throws -> Property {
-        var properties = try readProperties()
-        guard let index = properties.firstIndex(where: { $0.id == property.id }) else {
-            throw StoreError.propertyNotFound(property.id)
-        }
+        try performFileIOSync {
+            var state = try migratedPropertyAndOrganizationState()
+            guard let index = state.properties.firstIndex(where: { $0.id == property.id }) else {
+                throw StoreError.propertyNotFound(property.id)
+            }
 
-        var updated = property
-        updated.updatedAt = Date()
-        properties[index] = updated
-        try writeProperties(properties)
-        return updated
+            var updated = property
+            let validOrgIDs = Set(state.organizations.map(\.id))
+            if updated.orgId == nil || (updated.orgId.map { !validOrgIDs.contains($0) } ?? false) {
+                updated.orgId = defaultOrganization(in: &state.organizations).id
+            }
+            if trimmedNonEmpty(updated.folderId) == nil {
+                let otherProperties = state.properties.enumerated().compactMap { offset, value in
+                    offset == index ? nil : value
+                }
+                updated.folderId = try nextAvailableFolderID(in: otherProperties)
+            }
+            updated.updatedAt = Date()
+            state.properties[index] = updated
+            try writeOrganizations(state.organizations)
+            try writeProperties(state.properties)
+            return updated
+        }
     }
 
     func deleteProperty(id: UUID) throws {
@@ -997,6 +1130,10 @@ final class LocalStore {
     }
 
     private func readProperties() throws -> [Property] {
+        try migratedPropertyAndOrganizationState().properties
+    }
+
+    private func readPropertiesRaw() throws -> [Property] {
         guard fileManager.fileExists(atPath: propertiesURL.path) else {
             return []
         }
@@ -1008,6 +1145,128 @@ final class LocalStore {
     private func writeProperties(_ properties: [Property]) throws {
         let data = try encoder.encode(properties)
         try data.write(to: propertiesURL, options: .atomic)
+    }
+
+    private func readOrganizationsRaw() throws -> [Organization] {
+        guard fileManager.fileExists(atPath: organizationsURL.path) else {
+            return []
+        }
+
+        let data = try Data(contentsOf: organizationsURL)
+        return try decoder.decode([Organization].self, from: data)
+    }
+
+    private func writeOrganizations(_ organizations: [Organization]) throws {
+        let data = try encoder.encode(organizations)
+        try data.write(to: organizationsURL, options: .atomic)
+    }
+
+    private func migratedPropertyAndOrganizationState() throws -> (properties: [Property], organizations: [Organization]) {
+        let organizationsFileExists = fileManager.fileExists(atPath: organizationsURL.path)
+        var organizations = normalizedOrganizations(try readOrganizationsRaw())
+        let originalOrganizationIDs = Set(organizations.map(\.id))
+        let defaultOrganization = defaultOrganization(in: &organizations)
+        let validOrganizationIDs = Set(organizations.map(\.id))
+        let didChangeOrganizations = !organizationsFileExists || Set(organizations.map(\.id)) != originalOrganizationIDs
+
+        var properties = try readPropertiesRaw()
+        var didChangeProperties = false
+        var seenFolderNumbers = Set<Int>()
+
+        for index in properties.indices {
+            if properties[index].orgId == nil || (properties[index].orgId.map { !validOrganizationIDs.contains($0) } ?? false) {
+                properties[index].orgId = defaultOrganization.id
+                didChangeProperties = true
+            }
+
+            let parsedFolderNumber = parseFolderNumber(properties[index].folderId)
+            if let parsedFolderNumber, !seenFolderNumbers.contains(parsedFolderNumber) {
+                seenFolderNumbers.insert(parsedFolderNumber)
+            } else {
+                properties[index].folderId = nil
+                didChangeProperties = true
+            }
+        }
+
+        for index in properties.indices where trimmedNonEmpty(properties[index].folderId) == nil {
+            let next = try nextAvailableFolderNumber(used: &seenFolderNumbers)
+            properties[index].folderId = formatFolderID(next)
+            didChangeProperties = true
+        }
+
+        if didChangeOrganizations {
+            try writeOrganizations(organizations)
+        }
+        if didChangeProperties {
+            try writeProperties(properties)
+        }
+
+        return (properties.sorted { $0.createdAt < $1.createdAt }, organizations)
+    }
+
+    private func normalizedOrganizations(_ organizations: [Organization]) -> [Organization] {
+        var seenNames = Set<String>()
+        var output: [Organization] = []
+        for organization in organizations {
+            let trimmedName = organization.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else { continue }
+            let key = trimmedName.lowercased()
+            guard seenNames.insert(key).inserted else { continue }
+            output.append(Organization(id: organization.id, name: trimmedName))
+        }
+        return output.sorted { lhs, rhs in
+            if lhs.name.caseInsensitiveCompare("Individual") == .orderedSame { return true }
+            if rhs.name.caseInsensitiveCompare("Individual") == .orderedSame { return false }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func defaultOrganization(in organizations: inout [Organization]) -> Organization {
+        if let existing = organizations.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Individual") == .orderedSame }) {
+            return existing
+        }
+        let created = Organization(name: "Individual")
+        organizations.append(created)
+        organizations = normalizedOrganizations(organizations)
+        return organizations.first(where: { $0.id == created.id }) ?? created
+    }
+
+    private func parseFolderNumber(_ folderId: String?) -> Int? {
+        guard let trimmed = trimmedNonEmpty(folderId),
+              trimmed.count == 5,
+              let value = Int(trimmed),
+              (1...99999).contains(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private func formatFolderID(_ value: Int) -> String {
+        String(format: "%05d", value)
+    }
+
+    private static func sanitizedExportFolderComponent(_ value: String) -> String {
+        let illegalCharacters = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        let sanitized = value.unicodeScalars.reduce(into: "") { partialResult, scalar in
+            partialResult.append(illegalCharacters.contains(scalar) ? " " : String(scalar))
+        }
+        return sanitized
+            .components(separatedBy: CharacterSet.whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func nextAvailableFolderID(in properties: [Property]) throws -> String {
+        var used = Set(properties.compactMap { parseFolderNumber($0.folderId) })
+        return formatFolderID(try nextAvailableFolderNumber(used: &used))
+    }
+
+    private func nextAvailableFolderNumber(used: inout Set<Int>) throws -> Int {
+        for candidate in 1...99999 where !used.contains(candidate) {
+            used.insert(candidate)
+            return candidate
+        }
+        throw StoreError.noAvailableFolderID
     }
 
     private func observationsFileURL(for propertyID: UUID) -> URL {
@@ -1091,15 +1350,41 @@ final class LocalStore {
         metadata.sessionID = session.id
         let currentProperty = currentProperty(for: session.propertyID)
         let propertyName = currentProperty?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let currentOrganization = currentProperty?.orgId.flatMap { organization(withID: $0) }
+        let primaryContactName = trimmedNonEmpty(currentProperty?.clientName)
         if (metadata.propertyNameAtCapture ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !propertyName.isEmpty {
             metadata.propertyNameAtCapture = propertyName
+        }
+        if metadata.orgID == nil {
+            metadata.orgID = currentProperty?.orgId
+        }
+        if metadata.orgNameAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.orgNameAtCapture = trimmedNonEmpty(currentOrganization?.name)
+        }
+        if metadata.folderIDAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.folderIDAtCapture = trimmedNonEmpty(currentProperty?.folderId)
+        }
+        if metadata.primaryContactNameAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.primaryContactNameAtCapture = primaryContactName
         }
         if session.exportedAt != nil, !propertyName.isEmpty {
             metadata.propertyNameAtExport = propertyName
         }
         if metadata.propertyAddressAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
             metadata.propertyAddressAtCapture = normalizedPropertyAddress(currentProperty?.address)
+        }
+        if metadata.propertyStreetAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.propertyStreetAtCapture = trimmedNonEmpty(currentProperty?.street)
+        }
+        if metadata.propertyCityAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.propertyCityAtCapture = trimmedNonEmpty(currentProperty?.city)
+        }
+        if metadata.propertyStateAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.propertyStateAtCapture = trimmedNonEmpty(currentProperty?.state)
+        }
+        if metadata.propertyZipAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            metadata.propertyZipAtCapture = trimmedNonEmpty(currentProperty?.zip)
         }
         if metadata.propertyPhoneAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
             metadata.propertyPhoneAtCapture = normalizedPropertyPhone(currentProperty?.clientPhone)
@@ -1137,9 +1422,17 @@ final class LocalStore {
                 schemaVersion: currentSessionSchemaVersion,
                 propertyID: propertyID,
                 sessionID: sessionID,
+                orgID: property?.orgId,
+                orgNameAtCapture: property?.orgId.flatMap { organization(withID: $0)?.name },
+                folderIDAtCapture: property?.folderId,
                 propertyNameAtCapture: nil,
                 propertyNameAtExport: nil,
+                primaryContactNameAtCapture: property?.clientName,
                 propertyAddressAtCapture: normalizedPropertyAddress(property?.address),
+                propertyStreetAtCapture: trimmedNonEmpty(property?.street),
+                propertyCityAtCapture: trimmedNonEmpty(property?.city),
+                propertyStateAtCapture: trimmedNonEmpty(property?.state),
+                propertyZipAtCapture: trimmedNonEmpty(property?.zip),
                 propertyPhoneAtCapture: normalizedPropertyPhone(property?.clientPhone),
                 timeZoneIdentifierAtCapture: captureTimeZone.identifier,
                 timeZoneOffsetAtCapture: captureTimeZone.offsetString,
@@ -1188,9 +1481,17 @@ final class LocalStore {
                 schemaVersion: currentSessionSchemaVersion,
                 propertyID: propertyID,
                 sessionID: sessionID,
+                orgID: property?.orgId,
+                orgNameAtCapture: property?.orgId.flatMap { organization(withID: $0)?.name },
+                folderIDAtCapture: property?.folderId,
                 propertyNameAtCapture: nil,
                 propertyNameAtExport: nil,
+                primaryContactNameAtCapture: property?.clientName,
                 propertyAddressAtCapture: normalizedPropertyAddress(property?.address),
+                propertyStreetAtCapture: trimmedNonEmpty(property?.street),
+                propertyCityAtCapture: trimmedNonEmpty(property?.city),
+                propertyStateAtCapture: trimmedNonEmpty(property?.state),
+                propertyZipAtCapture: trimmedNonEmpty(property?.zip),
                 propertyPhoneAtCapture: normalizedPropertyPhone(property?.clientPhone),
                 timeZoneIdentifierAtCapture: captureTimeZone.identifier,
                 timeZoneOffsetAtCapture: captureTimeZone.offsetString,
@@ -1293,13 +1594,22 @@ final class LocalStore {
     }
 
     private func currentProperty(for propertyID: UUID) -> Property? {
-        let properties = (try? readProperties()) ?? []
+        let properties = (try? migratedPropertyAndOrganizationState().properties) ?? ((try? readPropertiesRaw()) ?? [])
         return properties.first(where: { $0.id == propertyID })
+    }
+
+    private func organization(withID organizationID: UUID) -> Organization? {
+        let organizations = (try? migratedPropertyAndOrganizationState().organizations) ?? ((try? readOrganizationsRaw()) ?? [])
+        return organizations.first(where: { $0.id == organizationID })
     }
 
     private func normalizeSessionMetadata(_ metadata: SessionMetadata, propertyID: UUID, sessionID: UUID) -> SessionMetadata {
         let property = currentProperty(for: propertyID)
         let propertyName = property?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedOrgID = property?.orgId ?? metadata.orgID
+        let resolvedOrgName = resolvedOrgID.flatMap { organization(withID: $0)?.name } ?? trimmedNonEmpty(metadata.orgNameAtCapture)
+        let resolvedFolderID = trimmedNonEmpty(metadata.folderIDAtCapture) ?? trimmedNonEmpty(property?.folderId)
+        let resolvedPrimaryContactName = trimmedNonEmpty(metadata.primaryContactNameAtCapture) ?? trimmedNonEmpty(property?.clientName)
         let captureTimeZone = captureTimeZoneContext(
             identifier: metadata.timeZoneIdentifierAtCapture,
             offsetString: metadata.timeZoneOffsetAtCapture,
@@ -1309,6 +1619,10 @@ final class LocalStore {
         let resolvedAddress = (metadata.propertyAddressAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             ? normalizedPropertyAddress(property?.address)
             : metadata.propertyAddressAtCapture?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedStreet = trimmedNonEmpty(metadata.propertyStreetAtCapture) ?? trimmedNonEmpty(property?.street)
+        let resolvedCity = trimmedNonEmpty(metadata.propertyCityAtCapture) ?? trimmedNonEmpty(property?.city)
+        let resolvedState = trimmedNonEmpty(metadata.propertyStateAtCapture) ?? trimmedNonEmpty(property?.state)
+        let resolvedZip = trimmedNonEmpty(metadata.propertyZipAtCapture) ?? trimmedNonEmpty(property?.zip)
         let resolvedPhone = normalizedPropertyPhone(
             metadata.propertyPhoneAtCapture ?? property?.clientPhone
         )
@@ -1331,9 +1645,17 @@ final class LocalStore {
             schemaVersion: max(metadata.schemaVersion, currentSessionSchemaVersion),
             propertyID: propertyID,
             sessionID: sessionID,
+            orgID: resolvedOrgID,
+            orgNameAtCapture: resolvedOrgName,
+            folderIDAtCapture: resolvedFolderID,
             propertyNameAtCapture: trimmedNonEmpty(metadata.propertyNameAtCapture) ?? (propertyName.isEmpty ? nil : propertyName),
             propertyNameAtExport: trimmedNonEmpty(metadata.propertyNameAtExport),
+            primaryContactNameAtCapture: resolvedPrimaryContactName,
             propertyAddressAtCapture: resolvedAddress,
+            propertyStreetAtCapture: resolvedStreet,
+            propertyCityAtCapture: resolvedCity,
+            propertyStateAtCapture: resolvedState,
+            propertyZipAtCapture: resolvedZip,
             propertyPhoneAtCapture: resolvedPhone,
             timeZoneIdentifierAtCapture: captureTimeZone.identifier,
             timeZoneOffsetAtCapture: captureTimeZone.offsetString,

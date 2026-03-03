@@ -20,9 +20,17 @@ struct SessionMetadata: Codable {
     var schemaVersion: Int
     var propertyID: UUID
     var sessionID: UUID
+    var orgID: UUID?
+    var orgNameAtCapture: String?
+    var folderIDAtCapture: String?
     var propertyNameAtCapture: String?
     var propertyNameAtExport: String?
+    var primaryContactNameAtCapture: String?
     var propertyAddressAtCapture: String?
+    var propertyStreetAtCapture: String?
+    var propertyCityAtCapture: String?
+    var propertyStateAtCapture: String?
+    var propertyZipAtCapture: String?
     var propertyPhoneAtCapture: String?
     var timeZoneIdentifierAtCapture: String
     var timeZoneOffsetAtCapture: String
@@ -53,11 +61,31 @@ struct SessionMetadata: Codable {
     private enum CodingKeys: String, CodingKey {
         case schemaVersion
         case propertyID
+        case propertyId
         case sessionID
+        case orgID
+        case orgId
+        case orgNameAtCapture
+        case orgName
+        case folderIDAtCapture
+        case folderId
         case propertyNameAtCapture
+        case propertyName
         case propertyNameAtExport
+        case primaryContactNameAtCapture
+        case primaryContactName
         case propertyAddressAtCapture
+        case propertyAddress
+        case propertyStreetAtCapture
+        case propertyStreet
+        case propertyCityAtCapture
+        case propertyCity
+        case propertyStateAtCapture
+        case propertyState
+        case propertyZipAtCapture
+        case propertyZip
         case propertyPhoneAtCapture
+        case primaryContactPhone
         case timeZoneIdentifierAtCapture
         case timeZoneOffsetAtCapture
         case timeZoneOffsetMinutesAtCapture
@@ -84,9 +112,17 @@ struct SessionMetadata: Codable {
         schemaVersion: Int,
         propertyID: UUID,
         sessionID: UUID,
+        orgID: UUID? = nil,
+        orgNameAtCapture: String? = nil,
+        folderIDAtCapture: String? = nil,
         propertyNameAtCapture: String?,
         propertyNameAtExport: String?,
+        primaryContactNameAtCapture: String? = nil,
         propertyAddressAtCapture: String? = nil,
+        propertyStreetAtCapture: String? = nil,
+        propertyCityAtCapture: String? = nil,
+        propertyStateAtCapture: String? = nil,
+        propertyZipAtCapture: String? = nil,
         propertyPhoneAtCapture: String? = nil,
         timeZoneIdentifierAtCapture: String = TimeZone.current.identifier,
         timeZoneOffsetAtCapture: String = "+00:00",
@@ -111,9 +147,17 @@ struct SessionMetadata: Codable {
         self.schemaVersion = schemaVersion
         self.propertyID = propertyID
         self.sessionID = sessionID
+        self.orgID = orgID
+        self.orgNameAtCapture = SessionMetadata.trimmedNonEmpty(orgNameAtCapture)
+        self.folderIDAtCapture = SessionMetadata.trimmedNonEmpty(folderIDAtCapture)
         self.propertyNameAtCapture = propertyNameAtCapture
         self.propertyNameAtExport = propertyNameAtExport
+        self.primaryContactNameAtCapture = SessionMetadata.trimmedNonEmpty(primaryContactNameAtCapture)
         self.propertyAddressAtCapture = SessionMetadata.trimmedNonEmpty(propertyAddressAtCapture)
+        self.propertyStreetAtCapture = SessionMetadata.trimmedNonEmpty(propertyStreetAtCapture)
+        self.propertyCityAtCapture = SessionMetadata.trimmedNonEmpty(propertyCityAtCapture)
+        self.propertyStateAtCapture = SessionMetadata.trimmedNonEmpty(propertyStateAtCapture)
+        self.propertyZipAtCapture = SessionMetadata.trimmedNonEmpty(propertyZipAtCapture)
         self.propertyPhoneAtCapture = SessionMetadata.trimmedNonEmpty(propertyPhoneAtCapture)
         self.timeZoneIdentifierAtCapture = timeZoneIdentifierAtCapture.trimmingCharacters(in: .whitespacesAndNewlines)
         self.timeZoneOffsetAtCapture = timeZoneOffsetAtCapture.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -139,14 +183,50 @@ struct SessionMetadata: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
-        propertyID = try c.decode(UUID.self, forKey: .propertyID)
+        propertyID = try c.decodeIfPresent(UUID.self, forKey: .propertyID)
+            ?? c.decode(UUID.self, forKey: .propertyId)
         sessionID = try c.decode(UUID.self, forKey: .sessionID)
+        orgID = try c.decodeIfPresent(UUID.self, forKey: .orgID)
+            ?? c.decodeIfPresent(UUID.self, forKey: .orgId)
+        orgNameAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .orgNameAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .orgName)
+        )
+        folderIDAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .folderIDAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .folderId)
+        )
         propertyNameAtCapture = try c.decodeIfPresent(String.self, forKey: .propertyNameAtCapture)
+            ?? c.decodeIfPresent(String.self, forKey: .propertyName)
         propertyNameAtExport = try c.decodeIfPresent(String.self, forKey: .propertyNameAtExport)
+        primaryContactNameAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .primaryContactNameAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .primaryContactName)
+        )
         propertyAddressAtCapture = SessionMetadata.trimmedNonEmpty(
             try c.decodeIfPresent(String.self, forKey: .propertyAddressAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .propertyAddress)
         )
-        propertyPhoneAtCapture = SessionMetadata.trimmedNonEmpty(try c.decodeIfPresent(String.self, forKey: .propertyPhoneAtCapture))
+        propertyStreetAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .propertyStreetAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .propertyStreet)
+        )
+        propertyCityAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .propertyCityAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .propertyCity)
+        )
+        propertyStateAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .propertyStateAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .propertyState)
+        )
+        propertyZipAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .propertyZipAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .propertyZip)
+        )
+        propertyPhoneAtCapture = SessionMetadata.trimmedNonEmpty(
+            try c.decodeIfPresent(String.self, forKey: .propertyPhoneAtCapture)
+                ?? c.decodeIfPresent(String.self, forKey: .primaryContactPhone)
+        )
         timeZoneIdentifierAtCapture = try c.decodeIfPresent(String.self, forKey: .timeZoneIdentifierAtCapture)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? TimeZone.current.identifier
         timeZoneOffsetAtCapture = try c.decodeIfPresent(String.self, forKey: .timeZoneOffsetAtCapture)?
@@ -183,11 +263,31 @@ struct SessionMetadata: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(schemaVersion, forKey: .schemaVersion)
         try c.encode(propertyID, forKey: .propertyID)
+        try c.encode(propertyID, forKey: .propertyId)
         try c.encode(sessionID, forKey: .sessionID)
+        try c.encodeIfPresent(orgID, forKey: .orgID)
+        try c.encodeIfPresent(orgID, forKey: .orgId)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(orgNameAtCapture), forKey: .orgNameAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(orgNameAtCapture), forKey: .orgName)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(folderIDAtCapture), forKey: .folderIDAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(folderIDAtCapture), forKey: .folderId)
         try c.encodeIfPresent(propertyNameAtCapture, forKey: .propertyNameAtCapture)
+        try c.encodeIfPresent(propertyNameAtExport ?? propertyNameAtCapture, forKey: .propertyName)
         try c.encodeIfPresent(propertyNameAtExport, forKey: .propertyNameAtExport)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(primaryContactNameAtCapture), forKey: .primaryContactNameAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(primaryContactNameAtCapture), forKey: .primaryContactName)
         try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyAddressAtCapture), forKey: .propertyAddressAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyAddressAtCapture), forKey: .propertyAddress)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyStreetAtCapture), forKey: .propertyStreetAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyStreetAtCapture), forKey: .propertyStreet)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyCityAtCapture), forKey: .propertyCityAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyCityAtCapture), forKey: .propertyCity)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyStateAtCapture), forKey: .propertyStateAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyStateAtCapture), forKey: .propertyState)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyZipAtCapture), forKey: .propertyZipAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyZipAtCapture), forKey: .propertyZip)
         try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyPhoneAtCapture), forKey: .propertyPhoneAtCapture)
+        try c.encodeIfPresent(SessionMetadata.trimmedNonEmpty(propertyPhoneAtCapture), forKey: .primaryContactPhone)
         try c.encode(timeZoneIdentifierAtCapture.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .timeZoneIdentifierAtCapture)
         try c.encode(timeZoneOffsetAtCapture.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .timeZoneOffsetAtCapture)
         try c.encodeIfPresent(timeZoneOffsetMinutesAtCapture, forKey: .timeZoneOffsetMinutesAtCapture)
@@ -214,6 +314,39 @@ struct SessionMetadata: Codable {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+struct Organization: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
+
+    init(id: UUID = UUID(), name: String) {
+        self.id = id
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case orgId
+        case name
+        case orgName
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id)
+            ?? c.decode(UUID.self, forKey: .orgId)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+            ?? c.decode(String.self, forKey: .orgName)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(id, forKey: .orgId)
+        try c.encode(name, forKey: .name)
+        try c.encode(name, forKey: .orgName)
     }
 }
 
@@ -637,10 +770,16 @@ struct IssueMetadata: Codable, Identifiable, Equatable {
 
 struct Property: Codable, Identifiable, Equatable {
     let id: UUID
+    var orgId: UUID?
+    var folderId: String?
     var clientName: String?
     var clientPhone: String?
     var name: String
     var address: String?
+    var street: String?
+    var city: String?
+    var state: String?
+    var zip: String?
     var baselineSessionID: UUID?
     var isArchived: Bool
     var createdAt: Date
@@ -648,20 +787,32 @@ struct Property: Codable, Identifiable, Equatable {
 
     init(
         id: UUID = UUID(),
+        orgId: UUID? = nil,
+        folderId: String? = nil,
         clientName: String? = nil,
         clientPhone: String? = nil,
         name: String,
         address: String? = nil,
+        street: String? = nil,
+        city: String? = nil,
+        state: String? = nil,
+        zip: String? = nil,
         baselineSessionID: UUID? = nil,
         isArchived: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
+        self.orgId = orgId
+        self.folderId = folderId?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.clientName = clientName
         self.clientPhone = clientPhone
         self.name = name
         self.address = address
+        self.street = street?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.city = city?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.state = state?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.zip = zip?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.baselineSessionID = baselineSessionID
         self.isArchived = isArchived
         self.createdAt = createdAt
@@ -670,10 +821,16 @@ struct Property: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case orgId
+        case folderId
         case clientName
         case clientPhone
         case name
         case address
+        case street
+        case city
+        case state
+        case zip
         case baselineSessionID
         case isArchived
         case createdAt
@@ -683,10 +840,16 @@ struct Property: Codable, Identifiable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
+        orgId = try c.decodeIfPresent(UUID.self, forKey: .orgId)
+        folderId = try c.decodeIfPresent(String.self, forKey: .folderId)?.trimmingCharacters(in: .whitespacesAndNewlines)
         clientName = try c.decodeIfPresent(String.self, forKey: .clientName)
         clientPhone = try c.decodeIfPresent(String.self, forKey: .clientPhone)
         name = try c.decode(String.self, forKey: .name)
         address = try c.decodeIfPresent(String.self, forKey: .address)
+        street = try c.decodeIfPresent(String.self, forKey: .street)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        city = try c.decodeIfPresent(String.self, forKey: .city)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        state = try c.decodeIfPresent(String.self, forKey: .state)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        zip = try c.decodeIfPresent(String.self, forKey: .zip)?.trimmingCharacters(in: .whitespacesAndNewlines)
         baselineSessionID = try c.decodeIfPresent(UUID.self, forKey: .baselineSessionID)
         isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
         createdAt = try c.decode(Date.self, forKey: .createdAt)
@@ -696,10 +859,16 @@ struct Property: Codable, Identifiable, Equatable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(orgId, forKey: .orgId)
+        try c.encodeIfPresent(folderId?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .folderId)
         try c.encodeIfPresent(clientName, forKey: .clientName)
         try c.encodeIfPresent(clientPhone, forKey: .clientPhone)
         try c.encode(name, forKey: .name)
         try c.encodeIfPresent(address, forKey: .address)
+        try c.encodeIfPresent(street?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .street)
+        try c.encodeIfPresent(city?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .city)
+        try c.encodeIfPresent(state?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .state)
+        try c.encodeIfPresent(zip?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .zip)
         try c.encodeIfPresent(baselineSessionID, forKey: .baselineSessionID)
         try c.encode(isArchived, forKey: .isArchived)
         try c.encode(createdAt, forKey: .createdAt)

@@ -3237,6 +3237,42 @@ struct ContentView: View {
             shot.angleIndex == guidedAngle
     }
 
+    private func guidedSnapshot(_ snapshot: GuidedShot, matches guidedShot: GuidedShot, guidedKey targetGuidedKey: String) -> Bool {
+        if snapshot.id == guidedShot.id {
+            return true
+        }
+        if guidedKey(for: snapshot).caseInsensitiveCompare(targetGuidedKey) == .orderedSame {
+            return true
+        }
+        let snapshotBuilding = (snapshot.building ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let snapshotElevation = CanonicalElevation.normalize(snapshot.targetElevation) ?? (snapshot.targetElevation ?? "")
+        let snapshotDetail = (snapshot.detailType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let snapshotAngle = max(1, snapshot.angleIndex ?? 1)
+        let guidedBuilding = (guidedShot.building ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let guidedElevation = CanonicalElevation.normalize(guidedShot.targetElevation) ?? (guidedShot.targetElevation ?? "")
+        let guidedDetail = (guidedShot.detailType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let guidedAngle = max(1, guidedShot.angleIndex ?? 1)
+        return snapshotBuilding == guidedBuilding &&
+            snapshotElevation == guidedElevation &&
+            snapshotDetail == guidedDetail &&
+            snapshotAngle == guidedAngle
+    }
+
+    private func resolvedGuidedSnapshotImagePath(_ guidedShot: GuidedShot) -> String? {
+        let candidates = [
+            guidedShot.shot?.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+            guidedShot.referenceImagePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            guidedShot.referenceImageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        for candidate in candidates {
+            guard let candidate, !candidate.isEmpty else { continue }
+            if FileManager.default.fileExists(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     private func metadataForSession(
         propertyID: UUID,
         sessionID: UUID,
@@ -3406,18 +3442,24 @@ struct ContentView: View {
         }()
 
         for prior in priorSessions where prior.id != baselineSessionID {
-            guard let priorMeta = metadataForSession(propertyID: propertyID, sessionID: prior.id, cache: &metadataCache),
-                  let priorShot = priorMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) else {
+            guard let priorMeta = metadataForSession(propertyID: propertyID, sessionID: prior.id, cache: &metadataCache) else {
                 continue
             }
-            let resolved = resolvedSessionImagePath(
-                for: priorShot,
-                propertyID: propertyID,
-                sessionID: prior.id
-            )
-            if let path = resolved.absolutePath {
+            if let priorGuidedSnapshot = priorMeta.guidedShots.first(where: { guidedSnapshot($0, matches: guidedShot, guidedKey: key) }),
+               let path = resolvedGuidedSnapshotImagePath(priorGuidedSnapshot) {
                 print("[GuidedThumbResolve] propertyID=\(propertyID.uuidString) currentSessionID=\(currentSessionID?.uuidString ?? "NONE") guidedKey=\(key) chosenSource=prior chosenSessionID=\(prior.id.uuidString) chosenPath=\(path) exists=true")
                 return GuidedSessionThumbnailResolution(source: .prior, sessionID: prior.id, path: path, exists: true)
+            }
+            if let priorShot = priorMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
+                let resolved = resolvedSessionImagePath(
+                    for: priorShot,
+                    propertyID: propertyID,
+                    sessionID: prior.id
+                )
+                if let path = resolved.absolutePath {
+                    print("[GuidedThumbResolve] propertyID=\(propertyID.uuidString) currentSessionID=\(currentSessionID?.uuidString ?? "NONE") guidedKey=\(key) chosenSource=prior chosenSessionID=\(prior.id.uuidString) chosenPath=\(path) exists=true")
+                    return GuidedSessionThumbnailResolution(source: .prior, sessionID: prior.id, path: path, exists: true)
+                }
             }
         }
 
@@ -3433,16 +3475,22 @@ struct ContentView: View {
         }
 
         if let baselineSessionID,
-           let baselineMeta = metadataForSession(propertyID: propertyID, sessionID: baselineSessionID, cache: &metadataCache),
-           let baselineShot = baselineMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
-            let resolved = resolvedSessionImagePath(
-                for: baselineShot,
-                propertyID: propertyID,
-                sessionID: baselineSessionID
-            )
-            if let path = resolved.absolutePath {
+           let baselineMeta = metadataForSession(propertyID: propertyID, sessionID: baselineSessionID, cache: &metadataCache) {
+            if let baselineGuidedSnapshot = baselineMeta.guidedShots.first(where: { guidedSnapshot($0, matches: guidedShot, guidedKey: key) }),
+               let path = resolvedGuidedSnapshotImagePath(baselineGuidedSnapshot) {
                 print("[GuidedThumbResolve] propertyID=\(propertyID.uuidString) currentSessionID=\(currentSessionID?.uuidString ?? "NONE") guidedKey=\(key) chosenSource=baseline chosenSessionID=\(baselineSessionID.uuidString) chosenPath=\(path) exists=true")
                 return GuidedSessionThumbnailResolution(source: .baseline, sessionID: baselineSessionID, path: path, exists: true)
+            }
+            if let baselineShot = baselineMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
+                let resolved = resolvedSessionImagePath(
+                    for: baselineShot,
+                    propertyID: propertyID,
+                    sessionID: baselineSessionID
+                )
+                if let path = resolved.absolutePath {
+                    print("[GuidedThumbResolve] propertyID=\(propertyID.uuidString) currentSessionID=\(currentSessionID?.uuidString ?? "NONE") guidedKey=\(key) chosenSource=baseline chosenSessionID=\(baselineSessionID.uuidString) chosenPath=\(path) exists=true")
+                    return GuidedSessionThumbnailResolution(source: .baseline, sessionID: baselineSessionID, path: path, exists: true)
+                }
             }
         }
 
@@ -3557,31 +3605,41 @@ struct ContentView: View {
         }()
 
         for prior in priorSessions where prior.id != baselineSessionID {
-            guard let priorMeta = metadataForSession(propertyID: propertyID, sessionID: prior.id, cache: &metadataCache),
-                  let priorShot = priorMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) else {
+            guard let priorMeta = metadataForSession(propertyID: propertyID, sessionID: prior.id, cache: &metadataCache) else {
                 continue
             }
-            let resolved = resolvedSessionImagePath(
-                for: priorShot,
-                propertyID: propertyID,
-                sessionID: prior.id
-            )
-            if let path = resolved.absolutePath {
+            if let priorGuidedSnapshot = priorMeta.guidedShots.first(where: { guidedSnapshot($0, matches: guidedShot, guidedKey: key) }),
+               let path = resolvedGuidedSnapshotImagePath(priorGuidedSnapshot) {
                 return GuidedSessionThumbnailResolution(source: .prior, sessionID: prior.id, path: path, exists: true)
+            }
+            if let priorShot = priorMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
+                let resolved = resolvedSessionImagePath(
+                    for: priorShot,
+                    propertyID: propertyID,
+                    sessionID: prior.id
+                )
+                if let path = resolved.absolutePath {
+                    return GuidedSessionThumbnailResolution(source: .prior, sessionID: prior.id, path: path, exists: true)
+                }
             }
         }
 
         if let baselineSessionID,
            baselineSessionID != currentSessionID,
-           let baselineMeta = metadataForSession(propertyID: propertyID, sessionID: baselineSessionID, cache: &metadataCache),
-           let baselineShot = baselineMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
-            let resolved = resolvedSessionImagePath(
-                for: baselineShot,
-                propertyID: propertyID,
-                sessionID: baselineSessionID
-            )
-            if let path = resolved.absolutePath {
+           let baselineMeta = metadataForSession(propertyID: propertyID, sessionID: baselineSessionID, cache: &metadataCache) {
+            if let baselineGuidedSnapshot = baselineMeta.guidedShots.first(where: { guidedSnapshot($0, matches: guidedShot, guidedKey: key) }),
+               let path = resolvedGuidedSnapshotImagePath(baselineGuidedSnapshot) {
                 return GuidedSessionThumbnailResolution(source: .baseline, sessionID: baselineSessionID, path: path, exists: true)
+            }
+            if let baselineShot = baselineMeta.shots.first(where: { shotMetadata($0, matches: guidedShot, guidedKey: key) }) {
+                let resolved = resolvedSessionImagePath(
+                    for: baselineShot,
+                    propertyID: propertyID,
+                    sessionID: baselineSessionID
+                )
+                if let path = resolved.absolutePath {
+                    return GuidedSessionThumbnailResolution(source: .baseline, sessionID: baselineSessionID, path: path, exists: true)
+                }
             }
         }
 
@@ -3941,6 +3999,10 @@ struct ContentView: View {
             hasBaseline && guidedRemainingCount == 0 && flaggedRemainingCount == 0
         }
 
+        var hasOutstandingChecklistItems: Bool {
+            guidedRemainingCount > 0 || flaggedRemainingCount > 0
+        }
+
         var canSealNow: Bool {
             if hasBaseline { return isCompletionEligible }
             return currentSessionCaptureCount > 0
@@ -3959,6 +4021,7 @@ struct ContentView: View {
         }
 
         var isExportActionEnabled: Bool {
+            if hasOutstandingChecklistItems { return false }
             if isSealedNotDelivered { return true }
             if isSessionSealed && firstDeliveredAt != nil {
                 return reExportEligibleNow
@@ -3967,7 +4030,8 @@ struct ContentView: View {
         }
 
         var isExportLaterEnabled: Bool {
-            !isSessionSealed && canSealNow
+            if hasOutstandingChecklistItems { return false }
+            return !isSessionSealed && canSealNow
         }
 
         var exportDisabledReason: String? {
@@ -5483,26 +5547,18 @@ struct ContentView: View {
                         .multilineTextAlignment(.center)
 
                     VStack(spacing: 10) {
-                        Button("Update") {
-                            selectFlaggedPrimaryUpdate()
-                        }
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        flaggedPopupActionButton(
+                            "Update",
+                            fill: Color.blue,
+                            stroke: nil,
+                            action: selectFlaggedPrimaryUpdate
+                        )
 
-                        Button("Resolve") {
-                            selectFlaggedPrimaryResolve()
-                        }
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.white.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        flaggedPopupActionButton(
+                            "Resolve",
+                            fill: Color.white.opacity(0.10),
+                            stroke: Color.white.opacity(0.16),
+                            action: selectFlaggedPrimaryResolve
                         )
                     }
                 }
@@ -5547,26 +5603,20 @@ struct ContentView: View {
                     }
 
                     VStack(spacing: 10) {
-                        Button("Leave Observation Unchanged") {
-                            selectFlaggedUpdateLeaveUnchanged()
-                        }
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        flaggedPopupActionButton(
+                            "Leave Observation Unchanged",
+                            fontSize: 16,
+                            fill: Color.blue,
+                            stroke: nil,
+                            action: selectFlaggedUpdateLeaveUnchanged
+                        )
 
-                        Button("Revise Observation") {
-                            selectFlaggedUpdateRevise()
-                        }
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.white.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        flaggedPopupActionButton(
+                            "Revise Observation",
+                            fontSize: 16,
+                            fill: Color.white.opacity(0.10),
+                            stroke: Color.white.opacity(0.16),
+                            action: selectFlaggedUpdateRevise
                         )
                     }
                 }
@@ -5621,28 +5671,24 @@ struct ContentView: View {
                         .foregroundColor(.primary)
 
                     VStack(spacing: 10) {
-                        Button("Save and Capture") {
-                            commitFlaggedUpdatedObservationAndArm()
-                        }
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(draftUpdatedObservation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.blue.opacity(0.35) : Color.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .disabled(draftUpdatedObservation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        flaggedPopupActionButton(
+                            "Save and Capture",
+                            fontSize: 16,
+                            fill: draftUpdatedObservation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.blue.opacity(0.35) : Color.blue,
+                            stroke: nil,
+                            isEnabled: !draftUpdatedObservation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            action: commitFlaggedUpdatedObservationAndArm
+                        )
 
-                        Button("Back") {
-                            showFlaggedUpdatedObservationInput = false
-                            showFlaggedUpdateCommentChoice = true
-                        }
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .background(Color.white.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        flaggedPopupActionButton(
+                            "Back",
+                            fontSize: 16,
+                            fill: Color.white.opacity(0.10),
+                            stroke: Color.white.opacity(0.16),
+                            action: {
+                                showFlaggedUpdatedObservationInput = false
+                                showFlaggedUpdateCommentChoice = true
+                            }
                         )
                     }
                 }
@@ -5721,6 +5767,35 @@ struct ContentView: View {
         .onChange(of: showLevel) { _, newValue in
             if newValue { levelModel.start() } else { levelModel.stop() }
         }
+    }
+
+    @ViewBuilder
+    private func flaggedPopupActionButton(
+        _ title: String,
+        fontSize: CGFloat = 18,
+        fill: Color,
+        stroke: Color?,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundColor(.white.opacity(isEnabled ? 1.0 : 0.55))
+                .frame(maxWidth: .infinity, minHeight: 50)
+                .background(fill)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    if let stroke {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(stroke.opacity(isEnabled ? 1.0 : 0.55), lineWidth: 1)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .disabled(!isEnabled)
     }
 
     private func bottomMaskView(bottomBarH: CGFloat, containerWidth: CGFloat) -> some View {
@@ -8700,12 +8775,11 @@ extension ContentView {
             return
         }
 
-        let observations = (try? localStore.fetchObservations(propertyID: propertyID)) ?? []
         let guided = (try? localStore.fetchGuidedShots(propertyID: propertyID)) ?? []
 
-        let flaggedRemaining = carryoverFlaggedRemainingCount(observations: observations)
+        let flaggedRemaining = flaggedPendingCaptureCount
         let persisted = persistedGuidedSummary(propertyID: propertyID, sessionID: currentSession.id)
-        let guidedRemaining = persisted.remaining
+        let guidedRemaining = guidedRemainingForCompass
         let hasBaseline = appState.propertyHasBaseline(propertyID)
         let currentSessionCaptureCount = currentSessionPhotoCount(propertyID: propertyID)
         let reExportEligibleNow = appState.isReExportEligible(currentSession)
@@ -8713,7 +8787,7 @@ extension ContentView {
 
         print(
             "[EndSession] sessionID=\(currentSession.id.uuidString) " +
-            "metadataShots=\(persisted.metadataShotCount) guidedCount=\(guided.count) guidedRemaining=\(guidedRemaining)"
+            "metadataShots=\(persisted.metadataShotCount) guidedCount=\(guided.count) guidedRemaining=\(guidedRemaining) flaggedRemaining=\(flaggedRemaining)"
         )
         let liveGuidedCount = guidedRemainingForCompass
         print("[Badge] beforeOpen guidedCount=\(liveGuidedCount) flaggedCount=\(flaggedPendingCaptureCount)")
@@ -8874,7 +8948,8 @@ extension ContentView {
 
     private func startExportNowFlow() {
         guard !isPreparingSessionExport else { return }
-        if let summary = sessionActionsSummary, !summary.isExportActionEnabled {
+        if let summary = sessionActionsSummary,
+           (!summary.isExportActionEnabled || summary.hasOutstandingChecklistItems) {
             return
         }
         showSessionExportErrorPopup = false
@@ -8995,7 +9070,11 @@ extension ContentView {
         }
         let sessionID = session.id
         let exportArtifacts = try localStore.validatedSessionExportArtifacts(for: session)
-        let exportRoot = try StorageRoot.makeSessionExportRootFolder(propertyID: propertyID, sessionID: sessionID)
+        let propertyFolderName = try localStore.exportPropertyFolderName(propertyID: propertyID)
+        let exportRoot = try StorageRoot.makeSessionExportRootFolder(
+            propertyFolderName: propertyFolderName,
+            sessionID: sessionID
+        )
         let originalsRoot = exportRoot.appendingPathComponent("Originals", isDirectory: true)
         try fileManager.createDirectory(at: originalsRoot, withIntermediateDirectories: true)
 
@@ -9099,8 +9178,19 @@ extension ContentView {
         print("Export ZIP entries count: \(listedEntries.count)")
         print("Export ZIP entries preview: \(preview)")
 #endif
-        let actualPaths = Set(listedEntries)
-        guard expectedPaths.isSubset(of: actualPaths) else {
+        let zipRootFolderName = exportRoot.deletingLastPathComponent().lastPathComponent
+        let normalizedExpectedPaths = Set(expectedPaths.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "/")) })
+        let actualPaths = Set(listedEntries.compactMap { path -> String? in
+            let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !normalized.isEmpty else { return nil }
+            if normalized == zipRootFolderName { return nil }
+            let prefix = "\(zipRootFolderName)/"
+            if normalized.hasPrefix(prefix) {
+                return String(normalized.dropFirst(prefix.count))
+            }
+            return normalized
+        })
+        guard normalizedExpectedPaths.isSubset(of: actualPaths) else {
             throw NSError(domain: "ScoutCapture.Export", code: 7, userInfo: [NSLocalizedDescriptionKey: "ZIP integrity check failed."])
         }
 #if DEBUG
@@ -10835,13 +10925,14 @@ extension ContentView {
                     .foregroundColor(isEnabled ? label : label.opacity(0.45))
                     .frame(maxWidth: .infinity)
                     .frame(height: 46)
-                    .background(fill)
+                    .background(isEnabled ? fill : fill.opacity(0.45))
                     .clipShape(Capsule())
                     .overlay(
                         Capsule()
-                            .stroke(stroke, lineWidth: 1)
+                            .stroke(isEnabled ? stroke : stroke.opacity(0.45), lineWidth: 1)
                     )
             }
+            .opacity(isEnabled ? 1.0 : 0.72)
             .buttonStyle(.plain)
             .disabled(!isEnabled)
         }
@@ -12160,7 +12251,11 @@ extension ContentView {
             }
             let sessionID = session.id
             let exportArtifacts = try localStore.validatedSessionExportArtifacts(for: session)
-            let exportRoot = try StorageRoot.makeSessionExportRootFolder(propertyID: propertyID, sessionID: sessionID)
+            let propertyFolderName = try localStore.exportPropertyFolderName(propertyID: propertyID)
+            let exportRoot = try StorageRoot.makeSessionExportRootFolder(
+                propertyFolderName: propertyFolderName,
+                sessionID: sessionID
+            )
             let originalsRoot = exportRoot.appendingPathComponent("Originals", isDirectory: true)
             let stampedRoot = exportRoot.appendingPathComponent("Stamped", isDirectory: true)
             try fileManager.createDirectory(at: originalsRoot, withIntermediateDirectories: true)

@@ -8,6 +8,26 @@ extension Notification.Name {
 }
 
 final class AppState: ObservableObject {
+    enum PropertyCreationError: LocalizedError {
+        case missingPropertyName
+        case missingOrganization
+        case noAvailableFolderID
+        case persistenceFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .missingPropertyName:
+                return "Enter a property name."
+            case .missingOrganization:
+                return "Select an organization."
+            case .noAvailableFolderID:
+                return "No folder IDs are available. Please contact support."
+            case .persistenceFailed:
+                return "The property could not be saved."
+            }
+        }
+    }
+
     struct HubPropertyMeta {
         let clientLine: String?
         let addressLine: String?
@@ -27,6 +47,7 @@ final class AppState: ObservableObject {
     }
 
     @Published var properties: [Property] = []
+    @Published var organizations: [Organization] = []
     @Published private(set) var isLoading: Bool = true
     @Published private(set) var sessionIndexByProperty: [UUID: [Session]] = [:]
     @Published private(set) var draftSessionByProperty: [UUID: Session] = [:]
@@ -88,8 +109,10 @@ final class AppState: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let fetchedProperties = (try? self.localStore.fetchProperties()) ?? []
+            let fetchedOrganizations = (try? self.localStore.fetchOrganizations()) ?? []
             let caches = self.makeHubCaches(for: fetchedProperties)
             DispatchQueue.main.async {
+                self.organizations = fetchedOrganizations
                 self.applyHubCachePayload(properties: fetchedProperties, caches: caches)
                 self.isLoading = false
                 completion()
@@ -101,6 +124,7 @@ final class AppState: ObservableObject {
         isLoading = true
         do {
             let fetched = try localStore.fetchProperties()
+            organizations = (try? localStore.fetchOrganizations()) ?? []
             let caches = makeHubCaches(for: fetched)
             applyHubCachePayload(properties: fetched, caches: caches)
 
@@ -109,6 +133,7 @@ final class AppState: ObservableObject {
             }
         } catch {
             properties = []
+            organizations = []
             sessionIndexByProperty = [:]
             draftSessionByProperty = [:]
             pendingExportSessionByProperty = [:]
@@ -119,25 +144,40 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func createProperty(
+        organizationID: UUID,
         clientName: String,
         propertyName: String,
         address: String,
+        street: String = "",
+        city: String = "",
+        state: String = "",
+        zip: String = "",
         clientPhone: String = ""
-    ) -> Property? {
+    ) throws -> Property {
         let cleanedClientName = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanedName = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedStreet = street.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedCity = city.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedState = state.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedZip = zip.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanedPhone = clientPhone.filter(\.isNumber)
 
-        guard !cleanedName.isEmpty else { return nil }
+        guard !cleanedName.isEmpty else { throw PropertyCreationError.missingPropertyName }
+        guard organizations.contains(where: { $0.id == organizationID }) else { throw PropertyCreationError.missingOrganization }
 
         do {
             let property = Property(
                 id: UUID(),
+                orgId: organizationID,
                 clientName: cleanedClientName.isEmpty ? nil : cleanedClientName,
                 clientPhone: cleanedPhone.isEmpty ? nil : cleanedPhone,
                 name: cleanedName,
-                address: cleanedAddress.isEmpty ? nil : cleanedAddress
+                address: cleanedAddress.isEmpty ? nil : cleanedAddress,
+                street: cleanedStreet.isEmpty ? nil : cleanedStreet,
+                city: cleanedCity.isEmpty ? nil : cleanedCity,
+                state: cleanedState.isEmpty ? nil : cleanedState,
+                zip: cleanedZip.isEmpty ? nil : cleanedZip
             )
             let created = try localStore.createProperty(property)
             properties.append(created)
@@ -148,7 +188,23 @@ final class AppState: ObservableObject {
             }
             return created
         } catch {
-            return nil
+            if case LocalStore.StoreError.noAvailableFolderID = error {
+                throw PropertyCreationError.noAvailableFolderID
+            }
+            throw PropertyCreationError.persistenceFailed
+        }
+    }
+
+    @discardableResult
+    func createOrganization(name: String) -> Organization? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return nil }
+        do {
+            let created = try localStore.createOrganization(Organization(name: trimmedName))
+            organizations = (try? localStore.fetchOrganizations()) ?? organizations
+            return created
+        } catch {
+            return organizations.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmedName) == .orderedSame })
         }
     }
 
@@ -199,9 +255,14 @@ final class AppState: ObservableObject {
     @discardableResult
     func updatePropertyContact(
         id: UUID,
+        organizationID: UUID?,
         propertyName: String?,
         clientName: String?,
         address: String?,
+        street: String?,
+        city: String?,
+        state: String?,
+        zip: String?,
         clientPhone: String?
     ) -> Bool {
         guard let index = properties.firstIndex(where: { $0.id == id }) else { return false }
@@ -209,13 +270,24 @@ final class AppState: ObservableObject {
         let cleanedName = propertyName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let cleanedClient = clientName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let cleanedAddress = address?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanedStreet = street?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanedCity = city?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanedState = state?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanedZip = zip?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let digitsOnlyPhone = (clientPhone ?? "").filter(\.isNumber)
 
+        if let organizationID, organizations.contains(where: { $0.id == organizationID }) {
+            updated.orgId = organizationID
+        }
         if !cleanedName.isEmpty {
             updated.name = cleanedName
         }
         updated.clientName = cleanedClient.isEmpty ? nil : cleanedClient
         updated.address = cleanedAddress.isEmpty ? nil : cleanedAddress
+        updated.street = cleanedStreet.isEmpty ? nil : cleanedStreet
+        updated.city = cleanedCity.isEmpty ? nil : cleanedCity
+        updated.state = cleanedState.isEmpty ? nil : cleanedState
+        updated.zip = cleanedZip.isEmpty ? nil : cleanedZip
         updated.clientPhone = digitsOnlyPhone.isEmpty ? nil : digitsOnlyPhone
 
         do {

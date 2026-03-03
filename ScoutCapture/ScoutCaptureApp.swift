@@ -791,7 +791,7 @@ struct SessionHubView: View {
                 Image(colorScheme == .light ? "ScoutLogoNavy" : "ScoutLogoWhite")
                     .resizable()
                     .scaledToFit()
-                    .frame(height: 46)
+                    .frame(height: 58)
                     .accessibilityHidden(true)
                 
                 Text("Session View")
@@ -1256,6 +1256,18 @@ struct SessionHubView: View {
             let exportedAt: Date
             let albumTitle: String
             let albumLocalId: String
+            let orgId: UUID?
+            let orgName: String?
+            let folderId: String?
+            let propertyId: UUID
+            let propertyName: String
+            let primaryContactName: String?
+            let primaryContactPhone: String?
+            let propertyAddress: String?
+            let propertyStreet: String
+            let propertyCity: String
+            let propertyState: String
+            let propertyZip: String
             let property: Property?
             let session: Session?
             let activeIssueCount: Int
@@ -1311,7 +1323,11 @@ struct SessionHubView: View {
         }
 
         var assetEntries: [SessionExportAssetEntry] = []
-        let exportRoot = try StorageRoot.makeSessionExportRootFolder(propertyID: property.id, sessionID: session.id)
+        let propertyFolderName = try localStore.exportPropertyFolderName(propertyID: property.id)
+        let exportRoot = try StorageRoot.makeSessionExportRootFolder(
+            propertyFolderName: propertyFolderName,
+            sessionID: session.id
+        )
         let originalsRoot = exportRoot.appendingPathComponent("Originals", isDirectory: true)
         try FileManager.default.createDirectory(at: originalsRoot, withIntermediateDirectories: true)
         var expectedPaths = Set([
@@ -1371,6 +1387,18 @@ struct SessionHubView: View {
             exportedAt: Date(),
             albumTitle: property.name,
             albumLocalId: "",
+            orgId: property.orgId,
+            orgName: appState.organizations.first(where: { $0.id == property.orgId })?.name,
+            folderId: property.folderId,
+            propertyId: property.id,
+            propertyName: property.name,
+            primaryContactName: property.clientName,
+            primaryContactPhone: property.clientPhone,
+            propertyAddress: property.address,
+            propertyStreet: property.street ?? "",
+            propertyCity: property.city ?? "",
+            propertyState: property.state ?? "",
+            propertyZip: property.zip ?? "",
             property: property,
             session: session,
             activeIssueCount: sessionObservations.filter { $0.status == .active }.count,
@@ -1435,8 +1463,19 @@ struct SessionHubView: View {
         print("Pending export ZIP entries count: \(listedEntries.count)")
         print("Pending export ZIP entries preview: \(preview)")
 #endif
-        let actualPaths = Set(listedEntries)
-        guard expectedPaths.isSubset(of: actualPaths) else {
+        let zipRootFolderName = exportRoot.deletingLastPathComponent().lastPathComponent
+        let normalizedExpectedPaths = Set(expectedPaths.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "/")) })
+        let actualPaths = Set(listedEntries.compactMap { path -> String? in
+            let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !normalized.isEmpty else { return nil }
+            if normalized == zipRootFolderName { return nil }
+            let prefix = "\(zipRootFolderName)/"
+            if normalized.hasPrefix(prefix) {
+                return String(normalized.dropFirst(prefix.count))
+            }
+            return normalized
+        })
+        guard normalizedExpectedPaths.isSubset(of: actualPaths) else {
             throw NSError(domain: "ScoutCapture.PendingExport", code: 7, userInfo: [NSLocalizedDescriptionKey: "ZIP integrity check failed."])
         }
 #if DEBUG
@@ -2400,6 +2439,11 @@ private struct HubAddPropertySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     
+    @State private var selectedOrganizationID: UUID? = nil
+    @State private var showAddOrganizationPrompt: Bool = false
+    @State private var newOrganizationName: String = ""
+    @State private var propertyCreationErrorMessage: String? = nil
+    @State private var showPropertyCreationError: Bool = false
     @State private var clientName: String = ""
     @State private var clientPhone: String = ""
     @State private var propertyName: String = ""
@@ -2412,6 +2456,7 @@ private struct HubAddPropertySheet: View {
     @StateObject private var addressAutocomplete = AddressAutocompleteModel(resultTypes: .address)
     @FocusState private var focusedField: Field?
     @State private var hasAppliedInitialFocus: Bool = false
+    private let addOrganizationToken = "__add_new_organization__"
 
     private enum Field: Int, CaseIterable {
         case clientName
@@ -2486,8 +2531,19 @@ private struct HubAddPropertySheet: View {
             .background(Color(uiColor: .systemBackground))
 
             Form {
-                Section("Client") {
-                    TextField("Client name", text: $clientName)
+                Section("Organization") {
+                    Picker("Organization", selection: organizationSelectionToken) {
+                        ForEach(appState.organizations) { organization in
+                            Text(organization.name)
+                                .tag(organization.id.uuidString)
+                        }
+                        Text("Add new organization")
+                            .tag(addOrganizationToken)
+                    }
+                }
+
+                Section("Primary Contact") {
+                    TextField("Primary Contact Name", text: $clientName)
                         .textInputAutocapitalization(.words)
                         .focused($focusedField, equals: .clientName)
                         .submitLabel(.next)
@@ -2595,8 +2651,41 @@ private struct HubAddPropertySheet: View {
         }
         .ignoresSafeArea(edges: .bottom)
         .onAppear {
+            syncSelectedOrganizationIfNeeded()
             applyInitialClientFocusIfNeeded()
         }
+        .onChange(of: appState.organizations) { _, _ in
+            syncSelectedOrganizationIfNeeded()
+        }
+        .alert("Add Organization", isPresented: $showAddOrganizationPrompt) {
+            TextField("Organization Name", text: $newOrganizationName)
+            Button("Save") {
+                saveOrganization()
+            }
+            Button("Cancel", role: .cancel) {
+                syncSelectedOrganizationIfNeeded()
+            }
+        } message: {
+            Text("Enter the organization name.")
+        }
+        .alert("Unable to Save Property", isPresented: $showPropertyCreationError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(propertyCreationErrorMessage ?? "The property could not be saved.")
+        }
+    }
+
+    private var organizationSelectionToken: Binding<String> {
+        Binding(
+            get: { selectedOrganizationID?.uuidString ?? appState.organizations.first?.id.uuidString ?? "" },
+            set: { newValue in
+                if newValue == addOrganizationToken {
+                    showAddOrganizationPrompt = true
+                    return
+                }
+                selectedOrganizationID = UUID(uuidString: newValue)
+            }
+        )
     }
 
     private var formattedAddress: String {
@@ -2671,17 +2760,52 @@ private struct HubAddPropertySheet: View {
             focusFirstInvalidField()
             return
         }
+        guard let selectedOrganizationID else {
+            propertyCreationErrorMessage = "Select an organization."
+            showPropertyCreationError = true
+            return
+        }
 
-        let created = appState.createProperty(
-            clientName: clientName,
-            propertyName: propertyName,
-            address: addressForStorage,
-            clientPhone: clientPhone
-        )
-        if let created {
+        do {
+            let created = try appState.createProperty(
+                organizationID: selectedOrganizationID,
+                clientName: clientName,
+                propertyName: propertyName,
+                address: addressForStorage,
+                street: streetAddress,
+                city: city,
+                state: state,
+                zip: zipCode,
+                clientPhone: clientPhone
+            )
             appState.selectProperty(id: created.id)
             dismiss()
+        } catch {
+            propertyCreationErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            showPropertyCreationError = true
         }
+    }
+
+    private func syncSelectedOrganizationIfNeeded() {
+        if let selectedOrganizationID,
+           appState.organizations.contains(where: { $0.id == selectedOrganizationID }) {
+            return
+        }
+        selectedOrganizationID = appState.organizations.first?.id
+    }
+
+    private func saveOrganization() {
+        let trimmedName = newOrganizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            syncSelectedOrganizationIfNeeded()
+            return
+        }
+        if let organization = appState.createOrganization(name: trimmedName) {
+            selectedOrganizationID = organization.id
+        } else {
+            syncSelectedOrganizationIfNeeded()
+        }
+        newOrganizationName = ""
     }
 
     @ViewBuilder
@@ -2799,6 +2923,9 @@ private struct EditContactSheet: View {
 
     let property: Property
 
+    @State private var selectedOrganizationID: UUID? = nil
+    @State private var showAddOrganizationPrompt: Bool = false
+    @State private var newOrganizationName: String = ""
     @State private var propertyName: String = ""
     @State private var clientName: String = ""
     @State private var streetAddress: String = ""
@@ -2807,6 +2934,7 @@ private struct EditContactSheet: View {
     @State private var zipCode: String = ""
     @State private var phoneInput: String = ""
     @State private var showPendingExportRenameConfirm: Bool = false
+    private let addOrganizationToken = "__add_new_organization__"
 
     private var buttonFill: Color {
         colorScheme == .light ? Color.white.opacity(0.90) : Color.black.opacity(0.55)
@@ -2833,7 +2961,7 @@ private struct EditContactSheet: View {
 
                 Spacer(minLength: 0)
 
-                Text("Edit Contact")
+                Text("Edit Property")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(buttonLabel)
 
@@ -2855,8 +2983,19 @@ private struct EditContactSheet: View {
             .background(Color(uiColor: .systemBackground))
 
             Form {
-                Section("Client") {
-                    TextField("Client name", text: $clientName)
+                Section("Organization") {
+                    Picker("Organization", selection: organizationSelectionToken) {
+                        ForEach(appState.organizations) { organization in
+                            Text(organization.name)
+                                .tag(organization.id.uuidString)
+                        }
+                        Text("Add new organization")
+                            .tag(addOrganizationToken)
+                    }
+                }
+
+                Section("Primary Contact") {
+                    TextField("Primary Contact Name", text: $clientName)
                         .textInputAutocapitalization(.words)
 
                     TextField("Phone (optional)", text: $phoneInput)
@@ -2909,6 +3048,20 @@ private struct EditContactSheet: View {
         .onAppear {
             loadFromProperty()
         }
+        .onChange(of: appState.organizations) { _, _ in
+            syncSelectedOrganizationIfNeeded()
+        }
+        .alert("Add Organization", isPresented: $showAddOrganizationPrompt) {
+            TextField("Organization Name", text: $newOrganizationName)
+            Button("Save") {
+                saveOrganization()
+            }
+            Button("Cancel", role: .cancel) {
+                syncSelectedOrganizationIfNeeded()
+            }
+        } message: {
+            Text("Enter the organization name.")
+        }
         .alert("Rename Pending Export Property?", isPresented: $showPendingExportRenameConfirm) {
             Button("Continue") {
                 persistChanges()
@@ -2934,6 +3087,24 @@ private struct EditContactSheet: View {
             .joined(separator: ", ")
     }
 
+    private var organizationSelectionToken: Binding<String> {
+        Binding(
+            get: {
+                selectedOrganizationID?.uuidString
+                    ?? property.orgId?.uuidString
+                    ?? appState.organizations.first?.id.uuidString
+                    ?? ""
+            },
+            set: { newValue in
+                if newValue == addOrganizationToken {
+                    showAddOrganizationPrompt = true
+                    return
+                }
+                selectedOrganizationID = UUID(uuidString: newValue)
+            }
+        )
+    }
+
     private func saveChanges() {
         if shouldConfirmPendingExportRename() {
             showPendingExportRenameConfirm = true
@@ -2946,9 +3117,14 @@ private struct EditContactSheet: View {
         let digits = phoneInput.filter(\.isNumber)
         _ = appState.updatePropertyContact(
             id: property.id,
+            organizationID: selectedOrganizationID,
             propertyName: propertyName,
             clientName: clientName,
             address: composedAddress,
+            street: streetAddress,
+            city: city,
+            state: state,
+            zip: zipCode,
             clientPhone: digits
         )
         dismiss()
@@ -2962,14 +3138,45 @@ private struct EditContactSheet: View {
     }
 
     private func loadFromProperty() {
+        syncSelectedOrganizationIfNeeded()
+        selectedOrganizationID = property.orgId ?? appState.organizations.first?.id
         propertyName = property.name
         clientName = property.clientName ?? ""
-        let parsed = parseAddress(property.address)
-        streetAddress = parsed.street
-        city = parsed.city
-        state = parsed.state
-        zipCode = parsed.zip
+        if property.street != nil || property.city != nil || property.state != nil || property.zip != nil {
+            streetAddress = property.street ?? ""
+            city = property.city ?? ""
+            state = property.state ?? ""
+            zipCode = property.zip ?? ""
+        } else {
+            let parsed = parseAddress(property.address)
+            streetAddress = parsed.street
+            city = parsed.city
+            state = parsed.state
+            zipCode = parsed.zip
+        }
         phoneInput = formatPhoneDisplay((property.clientPhone ?? "").filter(\.isNumber))
+    }
+
+    private func syncSelectedOrganizationIfNeeded() {
+        if let selectedOrganizationID,
+           appState.organizations.contains(where: { $0.id == selectedOrganizationID }) {
+            return
+        }
+        selectedOrganizationID = property.orgId ?? appState.organizations.first?.id
+    }
+
+    private func saveOrganization() {
+        let trimmedName = newOrganizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            syncSelectedOrganizationIfNeeded()
+            return
+        }
+        if let organization = appState.createOrganization(name: trimmedName) {
+            selectedOrganizationID = organization.id
+        } else {
+            syncSelectedOrganizationIfNeeded()
+        }
+        newOrganizationName = ""
     }
 
     private func parseAddress(_ raw: String?) -> (street: String, city: String, state: String, zip: String) {
