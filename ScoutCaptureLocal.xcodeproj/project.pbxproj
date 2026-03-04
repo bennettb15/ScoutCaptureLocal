@@ -6,30 +6,34 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		D3342DF82F58870E004C4AB8 /* LocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF22F58870E004C4AB8 /* LocationManager.swift */; };
+		D3342DF92F58870E004C4AB8 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF32F58870E004C4AB8 /* Models.swift */; };
+		D3342DFA2F58870E004C4AB8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DEB2F58870E004C4AB8 /* AppState.swift */; };
+		D3342DFB2F58870E004C4AB8 /* LoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF02F58870E004C4AB8 /* LoadingView.swift */; };
+		D3342DFC2F58870E004C4AB8 /* CameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DED2F58870E004C4AB8 /* CameraPreview.swift */; };
+		D3342DFD2F58870E004C4AB8 /* ScoutCaptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF52F58870E004C4AB8 /* ScoutCaptureApp.swift */; };
+		D3342DFE2F58870E004C4AB8 /* StorageRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF62F58870E004C4AB8 /* StorageRoot.swift */; };
+		D3342DFF2F58870E004C4AB8 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DEE2F58870E004C4AB8 /* ContentView.swift */; };
+		D3342E002F58870E004C4AB8 /* LocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3342DF12F58870E004C4AB8 /* LocalStore.swift */; };
+		D3342E022F58870E004C4AB8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D3342DEC2F58870E004C4AB8 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		D3342DEB2F58870E004C4AB8 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		D3342DEC2F58870E004C4AB8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D3342DED2F58870E004C4AB8 /* CameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreview.swift; sourceTree = "<group>"; };
+		D3342DEE2F58870E004C4AB8 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		D3342DEF2F58870E004C4AB8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		D3342DF02F58870E004C4AB8 /* LoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoadingView.swift; sourceTree = "<group>"; };
+		D3342DF12F58870E004C4AB8 /* LocalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStore.swift; sourceTree = "<group>"; };
+		D3342DF22F58870E004C4AB8 /* LocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationManager.swift; sourceTree = "<group>"; };
+		D3342DF32F58870E004C4AB8 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		D3342DF42F58870E004C4AB8 /* ScoutCapture.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScoutCapture.entitlements; sourceTree = "<group>"; };
+		D3342DF52F58870E004C4AB8 /* ScoutCaptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoutCaptureApp.swift; sourceTree = "<group>"; };
+		D3342DF62F58870E004C4AB8 /* StorageRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageRoot.swift; sourceTree = "<group>"; };
 		D35FBC532F324104009057B0 /* ScoutCaptureLocal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScoutCaptureLocal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
-
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		D35FBC652F3261EF009057B0 /* Exceptions for "ScoutCapture" folder in "ScoutCaptureLocal" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-			);
-			target = D35FBC522F324104009057B0 /* ScoutCaptureLocal */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		D35FBC552F324104009057B0 /* ScoutCapture */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				D35FBC652F3261EF009057B0 /* Exceptions for "ScoutCapture" folder in "ScoutCaptureLocal" target */,
-			);
-			path = ScoutCapture;
-			sourceTree = "<group>";
-		};
-/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		D35FBC502F324104009057B0 /* Frameworks */ = {
@@ -42,10 +46,29 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		D3342DF72F58870E004C4AB8 /* ScoutCaptureLocalApp */ = {
+			isa = PBXGroup;
+			children = (
+				D3342DEB2F58870E004C4AB8 /* AppState.swift */,
+				D3342DEC2F58870E004C4AB8 /* Assets.xcassets */,
+				D3342DED2F58870E004C4AB8 /* CameraPreview.swift */,
+				D3342DEE2F58870E004C4AB8 /* ContentView.swift */,
+				D3342DEF2F58870E004C4AB8 /* Info.plist */,
+				D3342DF02F58870E004C4AB8 /* LoadingView.swift */,
+				D3342DF12F58870E004C4AB8 /* LocalStore.swift */,
+				D3342DF22F58870E004C4AB8 /* LocationManager.swift */,
+				D3342DF32F58870E004C4AB8 /* Models.swift */,
+				D3342DF42F58870E004C4AB8 /* ScoutCapture.entitlements */,
+				D3342DF52F58870E004C4AB8 /* ScoutCaptureApp.swift */,
+				D3342DF62F58870E004C4AB8 /* StorageRoot.swift */,
+			);
+			path = ScoutCaptureLocalApp;
+			sourceTree = "<group>";
+		};
 		D35FBC4A2F324104009057B0 = {
 			isa = PBXGroup;
 			children = (
-				D35FBC552F324104009057B0 /* ScoutCapture */,
+				D3342DF72F58870E004C4AB8 /* ScoutCaptureLocalApp */,
 				D35FBC542F324104009057B0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -72,9 +95,6 @@
 			buildRules = (
 			);
 			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				D35FBC552F324104009057B0 /* ScoutCapture */,
 			);
 			name = ScoutCaptureLocal;
 			packageProductDependencies = (
@@ -122,6 +142,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D3342E022F58870E004C4AB8 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -132,6 +153,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D3342DF82F58870E004C4AB8 /* LocationManager.swift in Sources */,
+				D3342DF92F58870E004C4AB8 /* Models.swift in Sources */,
+				D3342DFA2F58870E004C4AB8 /* AppState.swift in Sources */,
+				D3342DFB2F58870E004C4AB8 /* LoadingView.swift in Sources */,
+				D3342DFC2F58870E004C4AB8 /* CameraPreview.swift in Sources */,
+				D3342DFD2F58870E004C4AB8 /* ScoutCaptureApp.swift in Sources */,
+				D3342DFE2F58870E004C4AB8 /* StorageRoot.swift in Sources */,
+				D3342DFF2F58870E004C4AB8 /* ContentView.swift in Sources */,
+				D3342E002F58870E004C4AB8 /* LocalStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -270,7 +300,7 @@
 				DEVELOPMENT_TEAM = XH73THVT98;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = ScoutCapture/Info.plist;
+				INFOPLIST_FILE = ScoutCaptureLocalApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "SCOUT needs camera access to capture time-stamped property photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to embed GPS metadata into photos.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SCOUT needs permission to save captured photos to your photo library.";
@@ -309,7 +339,7 @@
 				DEVELOPMENT_TEAM = XH73THVT98;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = ScoutCapture/Info.plist;
+				INFOPLIST_FILE = ScoutCaptureLocalApp/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "SCOUT needs camera access to capture time-stamped property photos.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is used to embed GPS metadata into photos.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "SCOUT needs permission to save captured photos to your photo library.";

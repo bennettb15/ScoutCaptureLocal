@@ -788,7 +788,7 @@ struct SessionHubView: View {
             }
 
             if !isCompactSearchMode {
-                Image(colorScheme == .light ? "ScoutLogoNavy" : "ScoutLogoWhite")
+                Image(colorScheme == .light ? "ScoutCaptureLogoBlue" : "ScoutCaptureLogoWhite")
                     .resizable()
                     .scaledToFit()
                     .frame(height: 58)

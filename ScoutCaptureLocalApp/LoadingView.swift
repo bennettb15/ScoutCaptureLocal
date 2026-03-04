@@ -8,7 +8,7 @@ struct LoadingView: View {
     }
 
     private var logoName: String {
-        colorScheme == .dark ? "ScoutLogoWhite" : "ScoutLogoNavy"
+        colorScheme == .dark ? "ScoutCaptureLogoWhite" : "ScoutCaptureLogoBlue"
     }
 
     var body: some View {
