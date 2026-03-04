@@ -3097,7 +3097,7 @@ struct ContentView: View {
             if isGuidedShotSkippedInCurrentSession(guidedShot) {
                 return
             }
-            if isShotCapturedInCurrentSession(guidedShot.shot) {
+            if isGuidedShotCapturedInCurrentSession(guidedShot.shot) {
                 partial += 1
             }
         }
@@ -3186,7 +3186,7 @@ struct ContentView: View {
                 if isGuidedShotSkippedInCurrentSession(guidedShot) {
                     return key
                 }
-                guard isShotCapturedInCurrentSession(guidedShot.shot) else { return nil }
+                guard isGuidedShotCapturedInCurrentSession(guidedShot.shot) else { return nil }
                 return key
             }
         )
@@ -7333,7 +7333,12 @@ extension ContentView {
                             }
                         }()
                         let didApplyGuidedShot = shouldApplyGuidedRoute
-                            ? applyArmedGuidedShotIfNeeded(with: shot, referenceImagePath: referenceImagePath)
+                            ? applyArmedGuidedShotIfNeeded(
+                                with: shot,
+                                referenceImagePath: referenceImagePath,
+                                guidedIDAtCapture: armedGuidedIDAtCapture,
+                                retakeShotIDAtCapture: armedRetakeShotIDAtCapture
+                            )
                             : false
                         let didApplyIssueUpdate = shouldApplyFlaggedRoute
                             ? applyArmedIssueCaptureIfNeeded(with: shot)
@@ -7742,10 +7747,15 @@ extension ContentView {
                         fetchedGuidedShots[index].isCompleted = false
                     }
                 } else if let existingShot = guided.shot {
-                    // Preserve a locally persisted guided capture even if session metadata has not
-                    // materialized the guided shot row yet.
+                    // Preserve only current-session captures when metadata rows lag.
                     let existingPath = existingShot.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if !existingPath.isEmpty, Self.reportAsset(from: existingPath) != nil {
+                    let isCurrentSessionCapture = {
+                        guard let startedAt = currentSession?.startedAt else { return false }
+                        if existingShot.capturedAt < startedAt { return false }
+                        if let endedAt = currentSession?.endedAt, existingShot.capturedAt > endedAt { return false }
+                        return true
+                    }()
+                    if isCurrentSessionCapture, !existingPath.isEmpty, Self.reportAsset(from: existingPath) != nil {
                         fetchedGuidedShots[index].isCompleted = true
                         sessionShotIDs.insert(existingShot.id)
                     } else {
@@ -7955,7 +7965,7 @@ extension ContentView {
     }
 
     private func armGuidedShot(_ guidedShot: GuidedShot) {
-        guard !isShotCapturedInCurrentSession(guidedShot.shot) else { return }
+        guard !isGuidedShotCapturedInCurrentSession(guidedShot.shot) else { return }
         resetSelectionForSwitch()
         retakeContext = nil
         if let building = guidedShot.building, !building.isEmpty {
@@ -7979,7 +7989,7 @@ extension ContentView {
     }
 
     private func armGuidedRetake(_ guidedShot: GuidedShot) {
-        guard isShotCapturedInCurrentSession(guidedShot.shot), let existingShot = guidedShot.shot else { return }
+        guard isGuidedShotCapturedInCurrentSession(guidedShot.shot), let existingShot = guidedShot.shot else { return }
         resetSelectionForSwitch()
         if let building = guidedShot.building, !building.isEmpty {
             selectedBuilding = buildingCode(from: building)
@@ -8062,7 +8072,7 @@ extension ContentView {
 
     private func markGuidedShotSkipped(_ guidedShot: GuidedShot, reason: SkipReason, otherNote: String?) {
         guard let propertyID = appState.selectedPropertyID else { return }
-        guard !isShotCapturedInCurrentSession(guidedShot.shot) else { return }
+        guard !isGuidedShotCapturedInCurrentSession(guidedShot.shot) else { return }
 
         do {
             var allGuidedShots = try localStore.fetchGuidedShots(propertyID: propertyID)
@@ -8471,8 +8481,13 @@ extension ContentView {
         }
     }
 
-    private func applyArmedGuidedShotIfNeeded(with shot: Shot, referenceImagePath: String?) -> Bool {
-        guard let armedID = armedGuidedShotID else { return false }
+    private func applyArmedGuidedShotIfNeeded(
+        with shot: Shot,
+        referenceImagePath: String?,
+        guidedIDAtCapture: UUID?,
+        retakeShotIDAtCapture: UUID?
+    ) -> Bool {
+        guard let armedID = guidedIDAtCapture ?? armedGuidedShotID else { return false }
         guard let propertyID = appState.selectedPropertyID else {
             armedGuidedShotID = nil
             armedGuidedRetakeShotID = nil
@@ -8491,16 +8506,17 @@ extension ContentView {
                 return false
             }
 
-            let isRetake = armedGuidedRetakeShotID != nil
+            let expectedRetakeShotID = retakeShotIDAtCapture ?? armedGuidedRetakeShotID
+            let isRetake = expectedRetakeShotID != nil
             if isRetake {
-                guard allGuidedShots[idx].shot?.id == armedGuidedRetakeShotID else {
+                guard allGuidedShots[idx].shot?.id == expectedRetakeShotID else {
                     armedGuidedShotID = nil
                     armedGuidedRetakeShotID = nil
                     retakeContext = nil
                     currentCaptureIntent = .free
                     return false
                 }
-            } else if isShotCapturedInCurrentSession(allGuidedShots[idx].shot) {
+            } else if isGuidedShotCapturedInCurrentSession(allGuidedShots[idx].shot) {
                 armedGuidedShotID = nil
                 armedGuidedRetakeShotID = nil
                 retakeContext = nil
@@ -8882,7 +8898,7 @@ extension ContentView {
     }
 
     private func isGuidedShotHandledInCurrentSession(_ guidedShot: GuidedShot) -> Bool {
-        isShotCapturedInCurrentSession(guidedShot.shot) || isGuidedShotSkippedInCurrentSession(guidedShot)
+        isGuidedShotCapturedInCurrentSession(guidedShot.shot) || isGuidedShotSkippedInCurrentSession(guidedShot)
     }
 
     private func capturedImageLocalIdentifierForCurrentSession(_ observation: Observation) -> String? {
@@ -8902,6 +8918,22 @@ extension ContentView {
     private func isShotCapturedInCurrentSession(_ shot: Shot?) -> Bool {
         guard let shot else { return false }
         guard activeSessionShotIDs.contains(shot.id) else { return false }
+        let path = shot.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !path.isEmpty, Self.reportAsset(from: path) != nil else {
+            return false
+        }
+        return true
+    }
+
+    private func isGuidedShotCapturedInCurrentSession(_ shot: Shot?) -> Bool {
+        guard let shot else { return false }
+        guard let startedAt = appState.currentSession?.startedAt else { return false }
+        if shot.capturedAt < startedAt {
+            return false
+        }
+        if let endedAt = appState.currentSession?.endedAt, shot.capturedAt > endedAt {
+            return false
+        }
         let path = shot.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !path.isEmpty, Self.reportAsset(from: path) != nil else {
             return false
