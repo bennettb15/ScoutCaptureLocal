@@ -1416,6 +1416,14 @@ struct SessionHubView: View {
         for csvFile in localStore.exportCSVFiles(for: validationArtifacts.metadata) {
             try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
         }
+        if !validationArtifacts.prewritePassed || !validationArtifacts.postwritePassed {
+            let message = String(data: validationArtifacts.validationData, encoding: .utf8) ?? "Export validation failed."
+            throw NSError(
+                domain: "ScoutCapture.PendingExport",
+                code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "Export validation failed before ZIP creation.\n\n\(message)"]
+            )
+        }
 #if DEBUG
         print("EXPORT ROOT: \(exportRoot.path)")
         print("EXPORT ROOT FILES: \((try? StorageRoot.exportRootFilenames(exportRoot)) ?? [])")
@@ -1482,9 +1490,6 @@ struct SessionHubView: View {
         guard actualPaths.contains("session.json"), actualPaths.contains("validation.txt") else {
             assertionFailure("Pending export ZIP root missing session.json or validation.txt")
             throw NSError(domain: "ScoutCapture.PendingExport", code: 10, userInfo: [NSLocalizedDescriptionKey: "ZIP root missing validation artifacts."])
-        }
-        if !validationArtifacts.prewritePassed || !validationArtifacts.postwritePassed {
-            assertionFailure(String(data: validationArtifacts.validationData, encoding: .utf8) ?? "Export validation failed")
         }
 #endif
         progress?(.zipReady)

@@ -78,6 +78,7 @@ final class LocalStore {
     func validateExport(_ metadata: SessionMetadata, phase: String) -> ExportValidationReport {
         var failures: [String] = []
         let canonicalIssues = metadata.issues
+        let canonicalIssueIDs = Set(canonicalIssues.map(\.issueID))
         let activeIssues = canonicalIssues.filter {
             SessionMetadata.trimmedNonEmpty($0.issueStatus)?.lowercased() == "active"
         }
@@ -100,6 +101,16 @@ final class LocalStore {
         let guidedRowsCount = metadata.guidedShots.count
         let guidedSkippedCount = metadata.guidedShots.filter { $0.skipReason != nil }.count
         let guidedRetiredCount = metadata.guidedShots.filter { $0.status == .retired }.count
+        let sessionIDs = Set([metadata.sessionID])
+        let shotIDs = Set(metadata.shots.map(\.shotID))
+        let issueHistoryRowsCount = canonicalIssues.reduce(into: 0) { count, issue in
+            count += issue.historyEvents.filter { event in
+                event.sessionId == metadata.sessionID
+            }.count
+        }
+        var orphanIssueHistoryIssueRefs = 0
+        var orphanIssueHistorySessionRefs = 0
+        var orphanIssueHistoryShotRefs = 0
 
         if derivedFlaggedIssues.count != activeIssues.count {
             failures.append("flaggedIssues count \(derivedFlaggedIssues.count) does not match active issues count \(activeIssues.count)")
@@ -149,10 +160,41 @@ final class LocalStore {
             }
         }
         var logicalShotKeys = Set<String>()
+        var duplicateLogicalShotIdentityCount = 0
         for shot in metadata.shots {
             let key = logicalShotIdentity(for: shot)
             if !logicalShotKeys.insert(key).inserted {
                 failures.append("duplicate logical shot identity \(key)")
+                duplicateLogicalShotIdentityCount += 1
+            }
+        }
+
+        for issue in canonicalIssues {
+            if !canonicalIssueIDs.contains(issue.issueID) {
+                orphanIssueHistoryIssueRefs += issue.historyEvents.filter { event in
+                    event.sessionId == metadata.sessionID
+                }.count
+                failures.append("issue_history references missing issueID \(issue.issueID.uuidString)")
+                continue
+            }
+            for event in issue.historyEvents where event.sessionId == metadata.sessionID {
+                if let eventSessionID = event.sessionId, !sessionIDs.contains(eventSessionID) {
+                    orphanIssueHistorySessionRefs += 1
+                    failures.append("issue_history eventID \(event.id.uuidString) references sessionID \(eventSessionID.uuidString) not in sessions.csv")
+                }
+
+                let rawShotID = (event.details["shotId"] ?? event.details["shotID"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !rawShotID.isEmpty {
+                    if let eventShotID = UUID(uuidString: rawShotID) {
+                        if !shotIDs.contains(eventShotID) {
+                            orphanIssueHistoryShotRefs += 1
+                            failures.append("issue_history eventID \(event.id.uuidString) references shotID \(eventShotID.uuidString) not in shots.csv")
+                        }
+                    } else {
+                        orphanIssueHistoryShotRefs += 1
+                        failures.append("issue_history eventID \(event.id.uuidString) has invalid shotID \(rawShotID)")
+                    }
+                }
             }
         }
 
@@ -175,6 +217,12 @@ final class LocalStore {
         lines.append("  guidedRows: \(guidedRowsCount)")
         lines.append("  guidedSkipped: \(guidedSkippedCount)")
         lines.append("  guidedRetired: \(guidedRetiredCount)")
+        lines.append("")
+        lines.append("  issueHistoryRows: \(issueHistoryRowsCount)")
+        lines.append("  orphanIssueHistoryIssueRefs: \(orphanIssueHistoryIssueRefs)")
+        lines.append("  orphanIssueHistorySessionRefs: \(orphanIssueHistorySessionRefs)")
+        lines.append("  orphanIssueHistoryShotRefs: \(orphanIssueHistoryShotRefs)")
+        lines.append("  duplicateLogicalShotIdentity: \(duplicateLogicalShotIdentityCount)")
         lines.append("Result: \(statusLine)")
         if !failures.isEmpty {
             lines.append("Failures:")
@@ -458,7 +506,10 @@ final class LocalStore {
             pairs.map(\.1).sorted { $0.createdAt > $1.createdAt }
         }
         let rows = metadata.issues.flatMap { issue in
-            issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.map { event in
+            issue.historyEvents
+                .filter { $0.sessionId == metadata.sessionID }
+                .sorted { $0.timestamp < $1.timestamp }
+                .map { event in
                 let fieldChanged = event.details["field"] ?? ""
                 let oldValue = event.details["oldValue"] ?? event.details["oldReason"] ?? ""
                 let newValue = event.details["newValue"] ?? event.details["newReason"] ?? ""

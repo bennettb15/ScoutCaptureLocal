@@ -7379,6 +7379,8 @@ extension ContentView {
                             noteText: noteAtCapture,
                             isGuidedRetakeCapture: wasGuidedRetakeCapture,
                             retakeContext: activeRetakeContext,
+                            guidedIDAtCapture: armedGuidedIDAtCapture,
+                            flaggedObservationIDAtCapture: armedFlaggedIDAtCapture,
                             isGuidedHint: captureIsGuided,
                             isFlaggedHint: captureIsFlagged,
                             issueIDHint: createdObservationID ?? flaggedActionTargetObservation?.id,
@@ -7471,6 +7473,8 @@ extension ContentView {
         noteText: String,
         isGuidedRetakeCapture: Bool,
         retakeContext: RetakeContext?,
+        guidedIDAtCapture: UUID?,
+        flaggedObservationIDAtCapture: UUID?,
         isGuidedHint: Bool,
         isFlaggedHint: Bool,
         issueIDHint: UUID?,
@@ -7505,7 +7509,9 @@ extension ContentView {
             }
         }
 
-        if let guided = guidedShots.first(where: { $0.shot?.id == shot.id }) {
+        if let guided = guidedIDAtCapture.flatMap({ guidedID in
+            guidedShots.first(where: { $0.id == guidedID })
+        }) ?? guidedShots.first(where: { $0.shot?.id == shot.id }) {
             let guidedBuilding = guided.building?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let guidedElevation = CanonicalElevation.normalize(guided.targetElevation) ?? ""
             let guidedDetail = guided.detailType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -7518,7 +7524,9 @@ extension ContentView {
 
         if let propertyObservations = try? localStore.fetchObservations(propertyID: propertyID),
            let observation = propertyObservations.first(where: { obs in
-               obs.linkedShotID == shot.id || obs.shots.contains(where: { $0.id == shot.id })
+               obs.id == flaggedObservationIDAtCapture ||
+               obs.linkedShotID == shot.id ||
+               obs.shots.contains(where: { $0.id == shot.id })
            }) {
             isFlagged = true
             issueID = observation.id
@@ -7558,6 +7566,8 @@ extension ContentView {
 
         if !appState.propertyHasBaseline(propertyID),
            retakeContext == nil,
+           guidedIDAtCapture == nil,
+           flaggedObservationIDAtCapture == nil,
            angleIndexValue <= 1 {
             angleIndexValue = max(
                 1,
@@ -9148,6 +9158,14 @@ extension ContentView {
         for csvFile in localStore.exportCSVFiles(for: exportArtifacts.metadata) {
             try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
         }
+        if !exportArtifacts.prewritePassed || !exportArtifacts.postwritePassed {
+            let message = String(data: exportArtifacts.validationData, encoding: .utf8) ?? "Export validation failed."
+            throw NSError(
+                domain: "ScoutCapture.Export",
+                code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "Export validation failed before ZIP creation.\n\n\(message)"]
+            )
+        }
         progress?(.originals)
 
 #if DEBUG
@@ -9240,9 +9258,6 @@ extension ContentView {
         guard actualPaths.contains("session.json"), actualPaths.contains("validation.txt") else {
             assertionFailure("Export ZIP root missing session.json or validation.txt")
             throw NSError(domain: "ScoutCapture.Export", code: 10, userInfo: [NSLocalizedDescriptionKey: "ZIP root missing validation artifacts."])
-        }
-        if !exportArtifacts.prewritePassed || !exportArtifacts.postwritePassed {
-            assertionFailure(String(data: exportArtifacts.validationData, encoding: .utf8) ?? "Export validation failed")
         }
 #endif
         progress?(.zipReady)
@@ -12337,6 +12352,14 @@ extension ContentView {
             for csvFile in localStore.exportCSVFiles(for: exportArtifacts.metadata) {
                 try csvFile.data.write(to: exportRoot.appendingPathComponent(csvFile.filename), options: .atomic)
             }
+            if !exportArtifacts.prewritePassed || !exportArtifacts.postwritePassed {
+                let message = String(data: exportArtifacts.validationData, encoding: .utf8) ?? "Export validation failed."
+                throw NSError(
+                    domain: "ScoutCapture.Export",
+                    code: 11,
+                    userInfo: [NSLocalizedDescriptionKey: "Export validation failed before ZIP creation.\n\n\(message)"]
+                )
+            }
             
             for (index, asset) in assets.enumerated() {
                 guard let imageData = requestOriginalImageData(for: asset) else { continue }
@@ -12364,11 +12387,6 @@ extension ContentView {
             guard zipPaths.contains("session.json"), zipPaths.contains("validation.txt") else {
                 assertionFailure("Export ZIP root missing session.json or validation.txt")
                 throw ExportError.zipCreationFailed
-            }
-#endif
-#if DEBUG
-            if !exportArtifacts.prewritePassed || !exportArtifacts.postwritePassed {
-                assertionFailure(String(data: exportArtifacts.validationData, encoding: .utf8) ?? "Export validation failed")
             }
 #endif
             return zipURL
