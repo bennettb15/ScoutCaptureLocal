@@ -330,6 +330,7 @@ final class LocalStore {
             "detail_type",
             "angle_index",
             "shot_key",
+            "logical_shot_identity",
             "capture_kind",
             "is_flagged",
             "is_guided",
@@ -361,6 +362,7 @@ final class LocalStore {
                 shot.detailType,
                 String(max(1, shot.angleIndex)),
                 shot.shotKey,
+                shot.logicalShotIdentity,
                 normalizedCaptureKind(for: shot),
                 boolString(shot.isFlagged),
                 boolString(shot.isGuided),
@@ -393,7 +395,8 @@ final class LocalStore {
             "first_seen_at_utc",
             "last_seen_at_utc",
             "resolved_at_utc",
-            "shot_key"
+            "shot_key",
+            "logical_shot_identity"
         ]
 
         let property = currentProperty(for: metadata.propertyID)
@@ -401,8 +404,15 @@ final class LocalStore {
         let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
         let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
         let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
+        let shotsByIssueID = Dictionary(grouping: metadata.shots.compactMap { shot -> (UUID, ShotMetadata)? in
+            guard let issueID = shot.issueID else { return nil }
+            return (issueID, shot)
+        }, by: \.0).mapValues { pairs in
+            pairs.map(\.1).sorted { $0.createdAt > $1.createdAt }
+        }
         let rows = metadata.issues.map { issue in
             let firstSeenSessionId = issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.first?.sessionId?.uuidString ?? ""
+            let linkedShot = shotsByIssueID[issue.issueID]?.first
             return [
                 issue.issueID.uuidString,
                 metadata.propertyID.uuidString,
@@ -418,7 +428,8 @@ final class LocalStore {
                 iso8601String(issue.firstSeenAt),
                 iso8601String(issue.lastSeenAt),
                 iso8601String(issue.resolvedAt),
-                issue.shotKey ?? ""
+                issue.shotKey ?? linkedShot?.shotKey ?? "",
+                logicalShotIdentity(for: issue, linkedShot: linkedShot, sessionID: metadata.sessionID)
             ]
         }
 
@@ -435,15 +446,24 @@ final class LocalStore {
             "field_changed",
             "old_value",
             "new_value",
-            "shot_id"
+            "shot_id",
+            "logical_shot_identity"
         ]
 
+        let shotsByID = Dictionary(uniqueKeysWithValues: metadata.shots.map { ($0.shotID.uuidString.lowercased(), $0) })
+        let shotsByIssueID = Dictionary(grouping: metadata.shots.compactMap { shot -> (UUID, ShotMetadata)? in
+            guard let issueID = shot.issueID else { return nil }
+            return (issueID, shot)
+        }, by: \.0).mapValues { pairs in
+            pairs.map(\.1).sorted { $0.createdAt > $1.createdAt }
+        }
         let rows = metadata.issues.flatMap { issue in
             issue.historyEvents.sorted { $0.timestamp < $1.timestamp }.map { event in
                 let fieldChanged = event.details["field"] ?? ""
                 let oldValue = event.details["oldValue"] ?? event.details["oldReason"] ?? ""
                 let newValue = event.details["newValue"] ?? event.details["newReason"] ?? ""
                 let shotId = event.details["shotId"] ?? event.details["shotID"] ?? ""
+                let linkedShot = shotsByID[shotId.lowercased()] ?? shotsByIssueID[issue.issueID]?.first
                 return [
                     event.id.uuidString,
                     issue.issueID.uuidString,
@@ -453,7 +473,8 @@ final class LocalStore {
                     fieldChanged,
                     oldValue,
                     newValue,
-                    shotId
+                    shotId,
+                    logicalShotIdentity(for: issue, linkedShot: linkedShot, sessionID: metadata.sessionID)
                 ]
             }
         }
@@ -1812,25 +1833,16 @@ final class LocalStore {
     }
 
     private func logicalShotIdentity(for shot: ShotMetadata) -> String {
-        let normalizedKey = trimmedNonEmpty(shot.shotKey)?.lowercased()
-            ?? ShotMetadata.makeShotKey(
-                building: shot.building,
-                elevation: CanonicalElevation.normalize(shot.elevation) ?? shot.elevation,
-                detailType: shot.detailType,
-                angleIndex: max(1, shot.angleIndex)
-            ).lowercased()
-        let lane: String
-        let flaggedLane = shot.isFlagged
-            || shot.issueID != nil
-            || trimmedNonEmpty(shot.issueStatus) != nil
-            || trimmedNonEmpty(shot.captureKind) != nil
-        if flaggedLane {
-            let issueComponent = shot.issueID?.uuidString.lowercased() ?? "no-issue"
-            lane = "flagged|\(issueComponent)"
-        } else {
-            lane = "normal"
+        shot.logicalShotIdentity
+    }
+
+    private func logicalShotIdentity(for issue: IssueMetadata, linkedShot: ShotMetadata?, sessionID: UUID) -> String {
+        if let linkedShot {
+            return linkedShot.logicalShotIdentity
         }
-        return "\(shot.sessionID.uuidString.lowercased())|\(lane)|\(normalizedKey)"
+
+        let normalizedKey = trimmedNonEmpty(issue.shotKey)?.lowercased() ?? "no-shot-key"
+        return "\(sessionID.uuidString.lowercased())|flagged|\(issue.issueID.uuidString.lowercased())|\(normalizedKey)"
     }
 
     private func deduplicatedShots(_ shots: [ShotMetadata]) -> [ShotMetadata] {

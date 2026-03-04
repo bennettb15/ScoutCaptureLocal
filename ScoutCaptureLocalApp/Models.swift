@@ -389,6 +389,28 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
     var imageHeight: Int?
 
     var id: UUID { shotID }
+    var logicalShotIdentity: String {
+        let normalizedKey = shotKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ShotMetadata.makeShotKey(
+                building: building,
+                elevation: CanonicalElevation.normalize(elevation) ?? elevation,
+                detailType: detailType,
+                angleIndex: max(1, angleIndex)
+            ).lowercased()
+            : shotKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let lane: String
+        let flaggedLane = isFlagged
+            || issueID != nil
+            || ShotMetadata.trimmedNonEmpty(issueStatus) != nil
+            || ShotMetadata.trimmedNonEmpty(captureKind) != nil
+        if flaggedLane {
+            let issueComponent = issueID?.uuidString.lowercased() ?? "no-issue"
+            lane = "flagged|\(issueComponent)"
+        } else {
+            lane = "normal"
+        }
+        return "\(sessionID.uuidString.lowercased())|\(lane)|\(normalizedKey)"
+    }
 
     private enum CodingKeys: String, CodingKey {
         case shotID
@@ -426,6 +448,7 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         case accuracyMeters
         case imageWidth
         case imageHeight
+        case logicalShotIdentity
     }
 
     init(
@@ -590,6 +613,7 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(accuracyMeters, forKey: .accuracyMeters)
         try c.encodeIfPresent(imageWidth, forKey: .imageWidth)
         try c.encodeIfPresent(imageHeight, forKey: .imageHeight)
+        try c.encode(logicalShotIdentity, forKey: .logicalShotIdentity)
     }
 
     static func makeShotKey(building: String, elevation: String, detailType: String, angleIndex: Int) -> String {
