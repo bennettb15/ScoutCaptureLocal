@@ -148,6 +148,13 @@ final class LocalStore {
                 failures.append("flagged shotID \(shot.shotID.uuidString) has captureKind retake but firstCaptureKind is not captured")
             }
         }
+        var logicalShotKeys = Set<String>()
+        for shot in metadata.shots {
+            let key = logicalShotIdentity(for: shot)
+            if !logicalShotKeys.insert(key).inserted {
+                failures.append("duplicate logical shot identity \(key)")
+            }
+        }
 
         let statusLine = failures.isEmpty ? "PASS" : "FAIL"
         var lines: [String] = []
@@ -1627,9 +1634,18 @@ final class LocalStore {
             metadata.propertyPhoneAtCapture ?? property?.clientPhone
         )
 
-        let normalizedShots = metadata.shots
+        let normalizedShotBase = metadata.shots
             .map { normalizeShotMetadata($0, propertyID: propertyID, sessionID: sessionID, captureTimeZone: captureTimeZone) }
             .sorted { $0.createdAt < $1.createdAt }
+        let normalizedShots = deduplicatedShots(
+            restoredMissingGuidedShots(
+                from: normalizedShotBase,
+                guidedShots: metadata.guidedShots,
+                propertyID: propertyID,
+                sessionID: sessionID,
+                captureTimeZone: captureTimeZone
+            )
+        )
         let normalizedIssues = metadata.issues
             .map { normalizeIssueMetadata($0, captureTimeZone: captureTimeZone) }
         let observations = (try? fetchObservations(propertyID: propertyID)) ?? []
@@ -1793,6 +1809,146 @@ final class LocalStore {
             return normalizedValue ?? "captured"
         }
         return normalizedValue
+    }
+
+    private func logicalShotIdentity(for shot: ShotMetadata) -> String {
+        let normalizedKey = trimmedNonEmpty(shot.shotKey)?.lowercased()
+            ?? ShotMetadata.makeShotKey(
+                building: shot.building,
+                elevation: CanonicalElevation.normalize(shot.elevation) ?? shot.elevation,
+                detailType: shot.detailType,
+                angleIndex: max(1, shot.angleIndex)
+            ).lowercased()
+        let lane: String
+        let flaggedLane = shot.isFlagged
+            || shot.issueID != nil
+            || trimmedNonEmpty(shot.issueStatus) != nil
+            || trimmedNonEmpty(shot.captureKind) != nil
+        if flaggedLane {
+            let issueComponent = shot.issueID?.uuidString.lowercased() ?? "no-issue"
+            lane = "flagged|\(issueComponent)"
+        } else {
+            lane = "normal"
+        }
+        return "\(shot.sessionID.uuidString.lowercased())|\(lane)|\(normalizedKey)"
+    }
+
+    private func deduplicatedShots(_ shots: [ShotMetadata]) -> [ShotMetadata] {
+        var byIdentity: [String: ShotMetadata] = [:]
+        for shot in shots {
+            let identity = logicalShotIdentity(for: shot)
+            guard let existing = byIdentity[identity] else {
+                byIdentity[identity] = shot
+                continue
+            }
+
+            let keepNew: Bool
+            if shot.updatedAt != existing.updatedAt {
+                keepNew = shot.updatedAt > existing.updatedAt
+            } else if shot.createdAt != existing.createdAt {
+                keepNew = shot.createdAt > existing.createdAt
+            } else {
+                keepNew = shot.shotID.uuidString > existing.shotID.uuidString
+            }
+
+            if keepNew {
+                var replacement = shot
+                if replacement.firstCaptureKind?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                    replacement.firstCaptureKind = existing.firstCaptureKind
+                }
+                byIdentity[identity] = replacement
+            } else if existing.firstCaptureKind?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+                      let firstCaptureKind = shot.firstCaptureKind {
+                var mergedExisting = existing
+                mergedExisting.firstCaptureKind = firstCaptureKind
+                byIdentity[identity] = mergedExisting
+            }
+        }
+
+        return byIdentity.values.sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            return lhs.shotID.uuidString < rhs.shotID.uuidString
+        }
+    }
+
+    private func restoredMissingGuidedShots(
+        from shots: [ShotMetadata],
+        guidedShots: [GuidedShot],
+        propertyID: UUID,
+        sessionID: UUID,
+        captureTimeZone: CaptureTimeZoneContext
+    ) -> [ShotMetadata] {
+        var restored = shots
+        var existingIDs = Set(shots.map(\.shotID))
+
+        for guided in guidedShots {
+            guard let shot = guided.shot else { continue }
+            guard existingIDs.insert(shot.id).inserted else { continue }
+
+            let building = trimmedNonEmpty(guided.building) ?? ""
+            let elevation = CanonicalElevation.normalize(guided.targetElevation) ?? trimmedNonEmpty(guided.targetElevation) ?? ""
+            let detailType = trimmedNonEmpty(guided.detailType) ?? ""
+            let angleIndex = max(1, guided.angleIndex ?? 1)
+            guard !building.isEmpty, !elevation.isEmpty, !detailType.isEmpty else { continue }
+
+            let localIdentifier = trimmedNonEmpty(shot.imageLocalIdentifier) ?? ""
+            let originalFilename = localIdentifier.isEmpty
+                ? "\(shot.id.uuidString).heic"
+                : URL(fileURLWithPath: localIdentifier).lastPathComponent
+            let originalRelativePath = "Originals/\(originalFilename)"
+            let originalByteSize: Int? = {
+                guard !localIdentifier.isEmpty,
+                      let attributes = try? fileManager.attributesOfItem(atPath: localIdentifier),
+                      let size = attributes[.size] as? NSNumber else {
+                    return nil
+                }
+                return size.intValue
+            }()
+
+            restored.append(
+                ShotMetadata(
+                    shotID: shot.id,
+                    propertyID: propertyID,
+                    sessionID: sessionID,
+                    createdAt: shot.capturedAt,
+                    capturedAtLocal: localISO8601String(for: shot.capturedAt, timeZone: captureTimeZone.timeZone),
+                    updatedAt: shot.capturedAt,
+                    building: building,
+                    elevation: elevation,
+                    detailType: detailType,
+                    angleIndex: angleIndex,
+                    shotKey: ShotMetadata.makeShotKey(
+                        building: building,
+                        elevation: elevation,
+                        detailType: detailType,
+                        angleIndex: angleIndex
+                    ),
+                    isGuided: true,
+                    isFlagged: false,
+                    issueID: nil,
+                    issueStatus: nil,
+                    captureKind: nil,
+                    firstCaptureKind: nil,
+                    noteText: trimmedNonEmpty(shot.note),
+                    noteCategory: nil,
+                    originalFilename: originalFilename,
+                    originalRelativePath: originalRelativePath,
+                    originalByteSize: originalByteSize,
+                    stampedFilename: nil,
+                    stampedRelativePath: nil,
+                    captureMode: nil,
+                    lens: nil,
+                    exifOrientation: nil,
+                    latitude: nil,
+                    longitude: nil,
+                    accuracyMeters: nil,
+                    imageWidth: nil,
+                    imageHeight: nil
+                )
+            )
+        }
+
+        return restored
     }
 
     private func mergeIssuesWithCanonicalObservations(
