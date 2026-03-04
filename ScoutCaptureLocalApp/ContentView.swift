@@ -7696,8 +7696,7 @@ extension ContentView {
             "[BaselineState] propertyID=\(propertyID.uuidString) baselineSessionID=\(baselineState.baselineSessionID?.uuidString ?? "NONE") hasBaseline=\(baselineState.hasBaseline)"
         )
         let sessionMetadata = sessionMetadataForActiveSession(propertyID: propertyID, sessionID: activeSessionID)
-        let sessionShotIDs = Set((sessionMetadata?.shots ?? []).map(\.shotID))
-        activeSessionShotIDs = sessionShotIDs
+        var sessionShotIDs = Set((sessionMetadata?.shots ?? []).map(\.shotID))
         let isBaselineSessionActive = baselineState.baselineSessionID == activeSessionID
         let orderedSessions = ((try? localStore.fetchSessions(propertyID: propertyID)) ?? []).sorted { $0.startedAt < $1.startedAt }
         let currentSession = orderedSessions.first(where: { $0.id == activeSessionID }) ?? appState.currentSession
@@ -7742,6 +7741,17 @@ extension ContentView {
                         fetchedGuidedShots[index].shot = nil
                         fetchedGuidedShots[index].isCompleted = false
                     }
+                } else if let existingShot = guided.shot {
+                    // Preserve a locally persisted guided capture even if session metadata has not
+                    // materialized the guided shot row yet.
+                    let existingPath = existingShot.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !existingPath.isEmpty, Self.reportAsset(from: existingPath) != nil {
+                        fetchedGuidedShots[index].isCompleted = true
+                        sessionShotIDs.insert(existingShot.id)
+                    } else {
+                        fetchedGuidedShots[index].shot = nil
+                        fetchedGuidedShots[index].isCompleted = false
+                    }
                 } else {
                     fetchedGuidedShots[index].shot = nil
                     fetchedGuidedShots[index].isCompleted = false
@@ -7781,6 +7791,7 @@ extension ContentView {
                 referenceMap[guided.id] = referencePath
             }
         }
+        activeSessionShotIDs = sessionShotIDs
         guidedShots = fetchedGuidedShots
         guidedResolvedThumbnailPathByID = resolvedMap
         guidedReferencePathByID = referenceMap
