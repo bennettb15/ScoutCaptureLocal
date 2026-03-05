@@ -373,14 +373,13 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func stableDeviceOrientationForCapture() -> UIDeviceOrientation {
         // At shutter time, UIDevice can report faceUp/unknown even when the phone is held portrait.
-        // If we do not have a definite orientation, bias to portrait to prevent portrait shots
-        // from being tagged as landscape.
+        // Fall back to the last definite orientation we observed instead of forcing portrait.
         let o = UIDevice.current.orientation
         switch o {
         case .portrait, .portraitUpsideDown, .landscapeLeft, .landscapeRight:
             return o
         default:
-            return .portrait
+            return lastDeviceOrientation
         }
     }
 

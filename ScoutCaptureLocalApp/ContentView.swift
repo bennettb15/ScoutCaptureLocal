@@ -810,7 +810,7 @@ final class ReportLibraryModel: ObservableObject {
         let sourceProps = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]) ?? [:]
         let sourceOrientationRaw = (sourceProps[kCGImagePropertyOrientation] as? NSNumber)?.uint32Value
         let capturedOrientationRaw = metadataContext?.capturedExifOrientationRaw
-        let resolvedOrientationRaw = sourceOrientationRaw ?? capturedOrientationRaw ?? 1
+        let resolvedOrientationRaw = capturedOrientationRaw ?? sourceOrientationRaw ?? 1
         debugLogSaveStage(
             "orientation capturedRaw=\(capturedOrientationRaw.map(String.init) ?? "nil") sourceRaw=\(sourceOrientationRaw.map(String.init) ?? "nil") resolvedRaw=\(resolvedOrientationRaw)"
         )
@@ -7158,11 +7158,23 @@ extension ContentView {
         quickButtonHaptic.impactOccurred()
         quickButtonHaptic.prepare()
     }
+
+    private func stableDeviceOrientationForCaptureMetadata() -> UIDeviceOrientation {
+        let current = UIDevice.current.orientation
+        switch current {
+        case .portrait, .portraitUpsideDown, .landscapeLeft, .landscapeRight:
+            return current
+        default:
+            return lastValidDeviceOrientation
+        }
+    }
     
     private func capture() {
         let noteAtCapture = detailNote.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let propertyID = appState.selectedPropertyID,
               let sessionID = appState.currentSession?.id else { return }
+        let captureDeviceOrientationAtShutter = stableDeviceOrientationForCaptureMetadata()
+        let capturedExifOrientationRawAtShutter = ReportLibraryModel.cgOrientationRawFromDevice(captureDeviceOrientationAtShutter)
         let captureIntent = currentCaptureIntent
         let armedGuidedIDAtCapture: UUID? = {
             switch captureIntent {
@@ -7259,8 +7271,8 @@ extension ContentView {
                 angleIndex: captureAngleIndex
             )
             let captureLocation = locationManager.lastLocation
-            let capturedExifOrientationRaw = ReportLibraryModel.cgOrientationRawFromDevice(lastValidDeviceOrientation)
-            print("[SavePhoto] capture orientation device=\(lastValidDeviceOrientation.rawValue) exifRaw=\(capturedExifOrientationRaw)")
+            let capturedExifOrientationRaw = capturedExifOrientationRawAtShutter
+            print("[SavePhoto] capture orientation device=\(captureDeviceOrientationAtShutter.rawValue) exifRaw=\(capturedExifOrientationRaw)")
             let captureMetadataContext = ReportLibraryModel.EmbeddedMetadataContext(
                 propertyID: propertyID,
                 propertyName: selectedProperty?.name,
@@ -7384,7 +7396,8 @@ extension ContentView {
                             isGuidedHint: captureIsGuided,
                             isFlaggedHint: captureIsFlagged,
                             issueIDHint: createdObservationID ?? flaggedActionTargetObservation?.id,
-                            createdFlaggedObservationID: createdObservationID
+                            createdFlaggedObservationID: createdObservationID,
+                            capturedExifOrientation: Int(capturedExifOrientationRawAtShutter)
                         )
                         refreshActiveIssues()
                         refreshGuidedShots()
@@ -7478,7 +7491,8 @@ extension ContentView {
         isGuidedHint: Bool,
         isFlaggedHint: Bool,
         issueIDHint: UUID?,
-        createdFlaggedObservationID: UUID?
+        createdFlaggedObservationID: UUID?,
+        capturedExifOrientation: Int?
     ) {
         guard let propertyID = appState.selectedPropertyID else { return }
         guard let session = appState.currentSession else { return }
@@ -7592,7 +7606,7 @@ extension ContentView {
             detailType: detailTypeValue,
             angleIndex: max(1, angleIndexValue)
         )
-        let exifOrientation = Int(ReportLibraryModel.cgOrientationRawFromDevice(lastValidDeviceOrientation))
+        let exifOrientation = capturedExifOrientation ?? Int(ReportLibraryModel.cgOrientationRawFromDevice(lastValidDeviceOrientation))
         let location = locationManager.lastLocation
 
         var metadata = ShotMetadata(
@@ -10278,11 +10292,13 @@ extension ContentView {
         armedIssueNoteText = Self.observationCurrentReasonText(observation) ?? ""
         detailNote = armedIssueNoteText
         isArmedIssueDetailNoteReadOnly = true
-        if let resolvedFlaggedPath = flaggedResolvedThumbnailPathByID[observation.id],
-           !resolvedFlaggedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            loadGuidedReferenceThumbnail(referencePath: resolvedFlaggedPath, localIdentifier: nil)
-        } else if let localIdentifier = existingShot.imageLocalIdentifier {
-            loadGuidedReferenceThumbnail(referencePath: nil, localIdentifier: localIdentifier)
+        if let referencePath = flaggedReferencePathByID[observation.id],
+           !referencePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            loadGuidedReferenceThumbnail(referencePath: referencePath, localIdentifier: nil)
+        } else {
+            let sortedShots = observation.shots.sorted { $0.capturedAt < $1.capturedAt }
+            let referenceLocalID = sortedShots.first?.imageLocalIdentifier
+            loadGuidedReferenceThumbnail(referencePath: nil, localIdentifier: referenceLocalID)
         }
         showGuidedAlignmentOverlay = false
         armedUpdateObservationID = observation.id
@@ -13520,8 +13536,6 @@ extension ContentView {
         @State private var showSkipReasonDialog: Bool = false
         @State private var showSkipOtherSheet: Bool = false
         @State private var skipOtherText: String = ""
-        @State private var retakeTarget: GuidedShot? = nil
-        @State private var showRetakeConfirmation: Bool = false
         @State private var guidedViewerState: GuidedViewerState? = nil
         @State private var retireTarget: GuidedShot? = nil
         @State private var showRetireConfirmation: Bool = false
@@ -13585,8 +13599,7 @@ extension ContentView {
                                     showSkipReasonDialog = true
                                 },
                                 onTapRetake: {
-                                    retakeTarget = item
-                                    showRetakeConfirmation = true
+                                    onRetake(item)
                                 },
                                 onTapUndoSkip: {
                                     onUndoSkip(item)
@@ -13714,16 +13727,6 @@ extension ContentView {
                             }
                         }
                         .presentationDetents([.height(280)])
-                    }
-                    .confirmationDialog("Retake this guided shot?", isPresented: $showRetakeConfirmation, titleVisibility: .visible) {
-                        Button("Retake") {
-                            guard let item = retakeTarget else { return }
-                            onRetake(item)
-                            retakeTarget = nil
-                        }
-                        Button("Cancel", role: .cancel) {
-                            retakeTarget = nil
-                        }
                     }
                     .confirmationDialog("Retire this guided checkpoint?", isPresented: $showRetireConfirmation, titleVisibility: .visible) {
                         Button("Retire", role: .destructive) {
