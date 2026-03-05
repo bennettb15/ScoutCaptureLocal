@@ -420,6 +420,25 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: Focus
 
+    private func configureDefaultContinuousFocus(on device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            if device.isSubjectAreaChangeMonitoringEnabled != true {
+                device.isSubjectAreaChangeMonitoringEnabled = true
+            }
+            if device.isSmoothAutoFocusSupported {
+                device.isSmoothAutoFocusEnabled = true
+            }
+            device.unlockForConfiguration()
+        } catch {}
+    }
+
     func focus(atDevicePoint devicePoint: CGPoint) {
         guard let device = videoDevice else { return }
 
@@ -428,14 +447,25 @@ final class CameraManager: NSObject, ObservableObject {
 
             if device.isFocusPointOfInterestSupported {
                 device.focusPointOfInterest = devicePoint
-                device.focusMode = .autoFocus
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                } else if device.isFocusModeSupported(.autoFocus) {
+                    device.focusMode = .autoFocus
+                }
             }
 
             if device.isExposurePointOfInterestSupported {
                 device.exposurePointOfInterest = devicePoint
-                device.exposureMode = .autoExpose
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                } else if device.isExposureModeSupported(.autoExpose) {
+                    device.exposureMode = .autoExpose
+                }
             }
 
+            if device.isSubjectAreaChangeMonitoringEnabled != true {
+                device.isSubjectAreaChangeMonitoringEnabled = true
+            }
             device.unlockForConfiguration()
         } catch {}
     }
@@ -799,6 +829,7 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
         videoDevice = device
+        configureDefaultContinuousFocus(on: device)
         DispatchQueue.main.async {
             self.hdSupported = (self.currentPosition == .back)
         }
@@ -860,6 +891,7 @@ final class CameraManager: NSObject, ObservableObject {
             return
         }
         videoDevice = device
+        configureDefaultContinuousFocus(on: device)
         DispatchQueue.main.async {
             self.hdSupported = (self.currentPosition == .back)
         }
@@ -1222,6 +1254,7 @@ final class CameraManager: NSObject, ObservableObject {
 
             // Update the active device reference.
             videoDevice = device
+            configureDefaultContinuousFocus(on: device)
             // When HD is enabled on the back camera, force the device into the format
             // that supports the largest still photo dimensions.
             if self.currentPosition == .back, self.effectiveHDEnabled {
