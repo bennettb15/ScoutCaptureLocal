@@ -2948,6 +2948,8 @@ struct ContentView: View {
     @State private var guidedReferencePathByID: [UUID: String] = [:]
     @State private var flaggedResolvedThumbnailPathByID: [UUID: String] = [:]
     @State private var flaggedReferencePathByID: [UUID: String] = [:]
+    @State private var flaggedAngleIndexByID: [UUID: Int] = [:]
+    @State private var reservedAngleByContextKey: [String: Int] = [:]
     @State private var guidedThumbnailRefreshToken: UUID = UUID()
     @State private var gridThumbnailRefreshToken: UUID = UUID()
     @State private var armedGuidedShotID: UUID? = nil
@@ -4744,11 +4746,13 @@ struct ContentView: View {
                     propertyID: appState.selectedPropertyID,
                     sessionID: appState.currentSession?.id
                 )
+                reservedAngleByContextKey = [:]
                 resetSelectionForSwitch()
                 refreshActiveIssues()
                 refreshGuidedShots()
             }
             .onChange(of: appState.currentSession?.id) { previousSessionID, nextSessionID in
+                reservedAngleByContextKey = [:]
                 reportLibrary.setSessionContext(
                     propertyID: appState.selectedPropertyID,
                     sessionID: appState.currentSession?.id
@@ -4841,6 +4845,7 @@ struct ContentView: View {
             sessionShotIDs: activeSessionShotIDs,
             resolvedThumbnailPathByID: flaggedResolvedThumbnailPathByID,
             referencePathByID: flaggedReferencePathByID,
+            angleIndexByIssueID: flaggedAngleIndexByID,
             allowReferenceFallback: shouldAllowChecklistReferenceFallback,
             buildingOptions: $buildingOptions,
             detailTypesModel: detailTypesModel,
@@ -7239,6 +7244,16 @@ extension ContentView {
         }
         let captureShotID = activeRetakeContext?.existingShotID ?? UUID()
         let preferredRetakeFilename = activeRetakeContext?.existingOriginalFilename
+        let reservedAngleIndexAtCapture: Int? = {
+            guard case .free = captureIntent else { return nil }
+            return reserveNextAngleIndexForCaptureContext(
+                propertyID: propertyID,
+                building: selectedBuilding,
+                elevation: elevation,
+                detailType: currentDetailType,
+                excludingShotID: captureShotID
+            )
+        }()
         pendingCaptureSaveCount += 1
         camera.capturePhoto { data in
             guard let data else {
@@ -7362,7 +7377,11 @@ extension ContentView {
                         if !didApplyGuidedShot && !didApplyIssueUpdate && !didQueueResolution {
                             if case .free = captureIntent {
                                 if noteAtCapture.isEmpty {
-                                    createGuidedAngleFromCaptureIfNeeded(with: shot, referenceImagePath: referenceImagePath)
+                                    createGuidedAngleFromCaptureIfNeeded(
+                                        with: shot,
+                                        referenceImagePath: referenceImagePath,
+                                        preferredAngleIndex: reservedAngleIndexAtCapture
+                                    )
                                 } else {
                                     createdObservationID = createObservationFromCapturedDetailNote(noteAtCapture, shot: shot)
                                 }
@@ -7397,7 +7416,8 @@ extension ContentView {
                             isFlaggedHint: captureIsFlagged,
                             issueIDHint: createdObservationID ?? flaggedActionTargetObservation?.id,
                             createdFlaggedObservationID: createdObservationID,
-                            capturedExifOrientation: Int(capturedExifOrientationRawAtShutter)
+                            capturedExifOrientation: Int(capturedExifOrientationRawAtShutter),
+                            reservedAngleIndexAtCapture: reservedAngleIndexAtCapture
                         )
                         refreshActiveIssues()
                         refreshGuidedShots()
@@ -7492,7 +7512,8 @@ extension ContentView {
         isFlaggedHint: Bool,
         issueIDHint: UUID?,
         createdFlaggedObservationID: UUID?,
-        capturedExifOrientation: Int?
+        capturedExifOrientation: Int?,
+        reservedAngleIndexAtCapture: Int?
     ) {
         guard let propertyID = appState.selectedPropertyID else { return }
         guard let session = appState.currentSession else { return }
@@ -7512,18 +7533,25 @@ extension ContentView {
         var captureKind: String?
         var firstCaptureKind: String?
         var noteValue = noteText.isEmpty ? nil : noteText
+        var hasLockedAngleIndex = false
+        if let reservedAngleIndexAtCapture {
+            angleIndexValue = max(1, reservedAngleIndexAtCapture)
+            hasLockedAngleIndex = true
+        }
 
         if let retakeContext {
             buildingValue = retakeContext.building
             elevationValue = retakeContext.elevation
             detailTypeValue = retakeContext.detailType
             angleIndexValue = max(1, retakeContext.angleIndex)
+            hasLockedAngleIndex = true
             if isGuidedHint {
                 isGuided = true
             }
         }
 
-        if let guided = guidedIDAtCapture.flatMap({ guidedID in
+        if !hasLockedAngleIndex,
+           let guided = guidedIDAtCapture.flatMap({ guidedID in
             guidedShots.first(where: { $0.id == guidedID })
         }) ?? guidedShots.first(where: { $0.shot?.id == shot.id }) {
             let guidedBuilding = guided.building?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -7533,6 +7561,7 @@ extension ContentView {
             if !guidedElevation.isEmpty { elevationValue = guidedElevation }
             if !guidedDetail.isEmpty { detailTypeValue = guidedDetail }
             angleIndexValue = max(1, guided.angleIndex ?? 1)
+            hasLockedAngleIndex = true
             isGuided = true
         }
 
@@ -7576,24 +7605,42 @@ extension ContentView {
                 let obsNote = Self.observationCurrentReasonText(observation) ?? ""
                 noteValue = obsNote.isEmpty ? nil : obsNote
             }
+            if !hasLockedAngleIndex,
+               let persistedIssueAngle = persistedAngleIndexForIssue(propertyID: propertyID, issueID: observation.id) {
+                angleIndexValue = max(1, persistedIssueAngle)
+                hasLockedAngleIndex = true
+            }
         }
 
-        if !appState.propertyHasBaseline(propertyID),
-           retakeContext == nil,
-           guidedIDAtCapture == nil,
-           flaggedObservationIDAtCapture == nil,
-           angleIndexValue <= 1 {
-            angleIndexValue = max(
+        if !hasLockedAngleIndex {
+            let contextKey = captureAngleContextKey(
+                building: buildingValue,
+                elevation: elevationValue,
+                detailType: detailTypeValue
+            )
+            let reservedLast = reservedAngleByContextKey[contextKey] ?? 0
+            let persistedNext = max(
                 1,
-                nextSessionAngleIndexForBaselineCapture(
+                nextAngleIndexForCaptureContext(
                     propertyID: propertyID,
-                    sessionID: session.id,
                     building: buildingValue,
                     elevation: elevationValue,
                     detailType: detailTypeValue,
                     excludingShotID: shot.id
                 )
             )
+            angleIndexValue = max(reservedLast + 1, persistedNext)
+            reservedAngleByContextKey[contextKey] = angleIndexValue
+        } else {
+            let contextKey = captureAngleContextKey(
+                building: buildingValue,
+                elevation: elevationValue,
+                detailType: detailTypeValue
+            )
+            let reservedLast = reservedAngleByContextKey[contextKey] ?? 0
+            if angleIndexValue > reservedLast {
+                reservedAngleByContextKey[contextKey] = angleIndexValue
+            }
         }
 
         let localIdentifier = shot.imageLocalIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -7675,31 +7722,88 @@ extension ContentView {
         }
     }
 
-    private func nextSessionAngleIndexForBaselineCapture(
+    private func persistedAngleIndexForIssue(propertyID: UUID, issueID: UUID) -> Int? {
+        let orderedSessions = ((try? localStore.fetchSessions(propertyID: propertyID)) ?? [])
+            .sorted { $0.startedAt > $1.startedAt }
+        var best: (updatedAt: Date, angleIndex: Int)? = nil
+        for session in orderedSessions {
+            guard let metadata = try? localStore.loadSessionMetadata(propertyID: propertyID, sessionID: session.id) else {
+                continue
+            }
+            for shot in metadata.shots where shot.issueID == issueID {
+                let candidate = (updatedAt: shot.updatedAt, angleIndex: max(1, shot.angleIndex))
+                if let current = best {
+                    if candidate.updatedAt > current.updatedAt {
+                        best = candidate
+                    }
+                } else {
+                    best = candidate
+                }
+            }
+        }
+        return best?.angleIndex
+    }
+
+    private func captureAngleContextKey(building: String, elevation: String, detailType: String) -> String {
+        let normalizedBuilding = building.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedElevation = (CanonicalElevation.normalize(elevation) ?? elevation)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedDetailType = detailType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(normalizedBuilding)|\(normalizedElevation)|\(normalizedDetailType)"
+    }
+
+    private func nextAngleIndexForCaptureContext(
         propertyID: UUID,
-        sessionID: UUID,
         building: String,
         elevation: String,
         detailType: String,
         excludingShotID: UUID
     ) -> Int {
-        do {
-            let metadata = try localStore.loadSessionMetadata(propertyID: propertyID, sessionID: sessionID)
-            let normalizedElevation = CanonicalElevation.normalize(elevation) ?? elevation
-            let normalizedBuilding = building.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let normalizedDetailType = detailType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedElevation = CanonicalElevation.normalize(elevation) ?? elevation
+        let normalizedBuilding = building.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDetailType = detailType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let orderedSessions = ((try? localStore.fetchSessions(propertyID: propertyID)) ?? [])
+        var maxAngle = 0
 
-            let matchingAngles = metadata.shots.compactMap { existing -> Int? in
-                guard existing.shotID != excludingShotID else { return nil }
-                guard existing.building.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedBuilding else { return nil }
-                guard (CanonicalElevation.normalize(existing.elevation) ?? existing.elevation) == normalizedElevation else { return nil }
-                guard existing.detailType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedDetailType else { return nil }
-                return max(1, existing.angleIndex)
+        for session in orderedSessions {
+            guard let metadata = try? localStore.loadSessionMetadata(propertyID: propertyID, sessionID: session.id) else {
+                continue
             }
-            return (matchingAngles.max() ?? 0) + 1
-        } catch {
-            return 1
+            for existing in metadata.shots {
+                if existing.shotID == excludingShotID { continue }
+                if existing.building.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != normalizedBuilding { continue }
+                if (CanonicalElevation.normalize(existing.elevation) ?? existing.elevation) != normalizedElevation { continue }
+                if existing.detailType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != normalizedDetailType { continue }
+                maxAngle = max(maxAngle, max(1, existing.angleIndex))
+            }
         }
+
+        return maxAngle + 1
+    }
+
+    private func reserveNextAngleIndexForCaptureContext(
+        propertyID: UUID,
+        building: String,
+        elevation: String,
+        detailType: String,
+        excludingShotID: UUID
+    ) -> Int {
+        let contextKey = captureAngleContextKey(building: building, elevation: elevation, detailType: detailType)
+        let reservedLast = reservedAngleByContextKey[contextKey] ?? 0
+        let persistedNext = max(
+            1,
+            nextAngleIndexForCaptureContext(
+                propertyID: propertyID,
+                building: building,
+                elevation: elevation,
+                detailType: detailType,
+                excludingShotID: excludingShotID
+            )
+        )
+        let reserved = max(reservedLast + 1, persistedNext)
+        reservedAngleByContextKey[contextKey] = reserved
+        return reserved
     }
 
     private func refreshGuidedShots() {
@@ -8593,7 +8697,11 @@ extension ContentView {
         }
     }
 
-    private func createGuidedAngleFromCaptureIfNeeded(with shot: Shot, referenceImagePath: String?) {
+    private func createGuidedAngleFromCaptureIfNeeded(
+        with shot: Shot,
+        referenceImagePath: String?,
+        preferredAngleIndex: Int?
+    ) {
         guard let propertyID = appState.selectedPropertyID else { return }
 
         let building = selectedBuilding.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -8610,7 +8718,10 @@ extension ContentView {
                 Self.normalizeGuidedPart($0.detailType) == Self.normalizeGuidedPart(detailTypeValue)
             }
 
-            let nextAngle = (matching.map { max(1, $0.angleIndex ?? 1) }.max() ?? 0) + 1
+            let nextAngle = max(
+                1,
+                preferredAngleIndex ?? ((matching.map { max(1, $0.angleIndex ?? 1) }.max() ?? 0) + 1)
+            )
             let contextTitle = guidedContextLabel(building: building, elevation: elevationValue, detailType: detailTypeValue)
 
             let guided = GuidedShot(
@@ -10595,6 +10706,7 @@ extension ContentView {
             activeSessionShotIDs = []
             flaggedResolvedThumbnailPathByID = [:]
             flaggedReferencePathByID = [:]
+            flaggedAngleIndexByID = [:]
             carryoverIssueBadgeCount = 0
             flaggedPendingCaptureCount = 0
             reportLibrary.setActiveIssueCount(0)
@@ -10624,7 +10736,15 @@ extension ContentView {
                     }
                     return false
                 }
-                .sorted { $0.updatedAt > $1.updatedAt }
+                .sorted { lhs, rhs in
+                    if lhs.createdAt != rhs.createdAt {
+                        return lhs.createdAt < rhs.createdAt
+                    }
+                    if lhs.updatedAt != rhs.updatedAt {
+                        return lhs.updatedAt < rhs.updatedAt
+                    }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
 
             let baselineState = persistedBaselineState(propertyID: propertyID)
             let orderedSessions = ((try? localStore.fetchSessions(propertyID: propertyID)) ?? []).sorted { $0.startedAt < $1.startedAt }
@@ -10636,6 +10756,7 @@ extension ContentView {
             }
             var resolvedMap: [UUID: String] = [:]
             var referenceMap: [UUID: String] = [:]
+            var angleMap: [UUID: Int] = [:]
             for observation in activeObservations {
                 let resolved = resolveFlaggedThumbnailForDisplay(
                     propertyID: propertyID,
@@ -10657,9 +10778,13 @@ extension ContentView {
                 ) {
                     referenceMap[observation.id] = referencePath
                 }
+                if let persistedAngle = persistedAngleIndexForIssue(propertyID: propertyID, issueID: observation.id) {
+                    angleMap[observation.id] = max(1, persistedAngle)
+                }
             }
             flaggedResolvedThumbnailPathByID = resolvedMap
             flaggedReferencePathByID = referenceMap
+            flaggedAngleIndexByID = angleMap
 
             if let currentSessionID, let currentSessionStart {
                 carryoverIssueBadgeCount = observations.filter { observation in
@@ -10686,6 +10811,7 @@ extension ContentView {
             activeObservations = []
             flaggedResolvedThumbnailPathByID = [:]
             flaggedReferencePathByID = [:]
+            flaggedAngleIndexByID = [:]
             carryoverIssueBadgeCount = 0
             flaggedPendingCaptureCount = 0
             reportLibrary.setActiveIssueCount(0)
@@ -13669,26 +13795,6 @@ extension ContentView {
                         .padding(.top, 14)
                         .padding(.bottom, 4)
                     }
-                    .confirmationDialog("Skip reason", isPresented: $showSkipReasonDialog, titleVisibility: .visible) {
-                        Button("Inaccessible") {
-                            submitSkip(.inaccessible)
-                        }
-                        Button("Obstructed") {
-                            submitSkip(.obstructed)
-                        }
-                        Button("Active construction") {
-                            submitSkip(.activeConstruction)
-                        }
-                        Button("Safety concern") {
-                            submitSkip(.safetyConcern)
-                        }
-                        Button("Other") {
-                            showSkipOtherSheet = true
-                        }
-                        Button("Cancel", role: .cancel) {
-                            skipTarget = nil
-                        }
-                    }
                     .sheet(isPresented: $showSkipOtherSheet, onDismiss: {
                         skipOtherText = ""
                         skipTarget = nil
@@ -13727,18 +13833,6 @@ extension ContentView {
                             }
                         }
                         .presentationDetents([.height(280)])
-                    }
-                    .confirmationDialog("Retire this guided checkpoint?", isPresented: $showRetireConfirmation, titleVisibility: .visible) {
-                        Button("Retire", role: .destructive) {
-                            guard let item = retireTarget else { return }
-                            onRetire(item)
-                            retireTarget = nil
-                        }
-                        Button("Cancel", role: .cancel) {
-                            retireTarget = nil
-                        }
-                    } message: {
-                        Text("This removes the checkpoint from future guided sessions and records the change in SCOUT JSON.")
                     }
                     .sheet(item: $reclassifyTarget) { target in
                         ChecklistReclassifySheet(
@@ -13781,9 +13875,31 @@ extension ContentView {
                                 .overlay(
                                     Capsule()
                                         .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                                )
+                            )
                                 .padding(.top, 64)
                                 .transition(.opacity)
+                        }
+                    }
+                    .overlay {
+                        if showSkipReasonDialog {
+                            Color.black.opacity(0.42)
+                                .ignoresSafeArea()
+                                .onTapGesture {
+                                    showSkipReasonDialog = false
+                                    skipTarget = nil
+                                }
+                            skipReasonDialogCard()
+                                .padding(.horizontal, 18)
+                        }
+                        if showRetireConfirmation {
+                            Color.black.opacity(0.42)
+                                .ignoresSafeArea()
+                                .onTapGesture {
+                                    showRetireConfirmation = false
+                                    retireTarget = nil
+                                }
+                            retireConfirmationDialogCard()
+                                .padding(.horizontal, 18)
                         }
                     }
                 }
@@ -13807,8 +13923,96 @@ extension ContentView {
         private func submitSkip(_ reason: SkipReason, otherNote: String? = nil) {
             guard let item = skipTarget else { return }
             onSkip(item, reason, otherNote)
+            showSkipReasonDialog = false
             skipTarget = nil
             skipOtherText = ""
+        }
+
+        private func skipReasonDialogCard() -> some View {
+            VStack(spacing: 0) {
+                Text("Skip Reason")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.blue)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
+
+                dialogDivider()
+                dialogButton("Inaccessible") { submitSkip(.inaccessible) }
+                dialogDivider()
+                dialogButton("Obstructed") { submitSkip(.obstructed) }
+                dialogDivider()
+                dialogButton("Active construction") { submitSkip(.activeConstruction) }
+                dialogDivider()
+                dialogButton("Safety concern") { submitSkip(.safetyConcern) }
+                dialogDivider()
+                dialogButton("Other") {
+                    showSkipReasonDialog = false
+                    showSkipOtherSheet = true
+                }
+            }
+            .background(Color(uiColor: .systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .frame(maxWidth: 360)
+        }
+
+        private func retireConfirmationDialogCard() -> some View {
+            VStack(spacing: 0) {
+                Text("Retire this guided checkpoint?")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
+
+                Text("This removes the checkpoint from future guided sessions and records the change in SCOUT JSON.")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 12)
+
+                dialogDivider()
+                dialogButton("Retire", destructive: true) {
+                    guard let item = retireTarget else { return }
+                    onRetire(item)
+                    showRetireConfirmation = false
+                    retireTarget = nil
+                }
+                dialogDivider()
+                dialogButton("Cancel") {
+                    showRetireConfirmation = false
+                    retireTarget = nil
+                }
+            }
+            .background(Color(uiColor: .systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .frame(maxWidth: 360)
+        }
+
+        private func dialogButton(_ title: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+            Button(action: action) {
+                Text(title)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundColor(destructive ? .red : .primary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+
+        private func dialogDivider() -> some View {
+            Rectangle()
+                .fill(Color.primary.opacity(0.12))
+                .frame(height: 1)
         }
 
         private func showImagePreview(localIdentifier: String?, title: String, detailId: String) {
@@ -14268,6 +14472,7 @@ extension ContentView {
         let sessionShotIDs: Set<UUID>
         let resolvedThumbnailPathByID: [UUID: String]
         let referencePathByID: [UUID: String]
+        let angleIndexByIssueID: [UUID: Int]
         let allowReferenceFallback: Bool
         @Binding var buildingOptions: [String]
         @ObservedObject var detailTypesModel: DetailTypesModel
@@ -14335,6 +14540,7 @@ extension ContentView {
                                     observation: observation,
                                     currentSessionID: currentSessionID,
                                     resolvedThumbnailPath: resolvedThumbnailPathByID[observation.id],
+                                    angleIndex: angleIndexByIssueID[observation.id],
                                     cache: cache,
                                     hasReferenceImage: referenceImageLocalID(for: observation) != nil,
                                     hasCapturedImage: capturedImageLocalID(for: observation) != nil,
@@ -14702,6 +14908,7 @@ extension ContentView {
             let observation: Observation
             let currentSessionID: UUID?
             let resolvedThumbnailPath: String?
+            let angleIndex: Int?
             let cache: AssetImageCache
             let hasReferenceImage: Bool
             let hasCapturedImage: Bool
@@ -14726,16 +14933,20 @@ extension ContentView {
             }
 
             private var statusLabel: String {
+                let angleSuffix: String = {
+                    guard let angleIndex else { return "" }
+                    return " - Angle \(max(1, angleIndex))"
+                }()
                 if observation.resolvedInSessionID == currentSessionID {
-                    return "Resolved"
+                    return "Resolved\(angleSuffix)"
                 }
                 if observation.updatedInSessionID == currentSessionID {
                     if observation.sessionID == currentSessionID {
-                        return "Active - Captured"
+                        return "Active - Captured\(angleSuffix)"
                     }
-                    return "Active - Update Captured"
+                    return "Active - Update Captured\(angleSuffix)"
                 }
-                return "Active"
+                return "Active\(angleSuffix)"
             }
 
             private var statusColor: Color {
