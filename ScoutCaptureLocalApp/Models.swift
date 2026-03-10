@@ -363,6 +363,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
     var elevation: String
     var detailType: String
     var angleIndex: Int
+    var trade: String?
+    var priority: String?
     var shotKey: String
     var isGuided: Bool
     var isFlagged: Bool
@@ -449,6 +451,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         case imageWidth
         case imageHeight
         case logicalShotIdentity
+        case trade
+        case priority
     }
 
     init(
@@ -462,6 +466,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         elevation: String,
         detailType: String,
         angleIndex: Int,
+        trade: String? = nil,
+        priority: String? = nil,
         shotKey: String,
         isGuided: Bool,
         isFlagged: Bool,
@@ -496,6 +502,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         self.elevation = elevation
         self.detailType = detailType
         self.angleIndex = angleIndex
+        self.trade = ShotMetadata.trimmedNonEmpty(trade)
+        self.priority = ShotMetadata.normalizedPriority(priority)
         self.shotKey = shotKey
         self.isGuided = isGuided
         self.isFlagged = isFlagged
@@ -536,6 +544,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         elevation = CanonicalElevation.normalize(try c.decodeIfPresent(String.self, forKey: .elevation)) ?? ""
         detailType = try c.decodeIfPresent(String.self, forKey: .detailType) ?? ""
         angleIndex = max(1, try c.decodeIfPresent(Int.self, forKey: .angleIndex) ?? 1)
+        trade = ShotMetadata.trimmedNonEmpty(try c.decodeIfPresent(String.self, forKey: .trade))
+        priority = ShotMetadata.normalizedPriority(try c.decodeIfPresent(String.self, forKey: .priority))
         let decodedShotKey = try c.decodeIfPresent(String.self, forKey: .shotKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         shotKey = decodedShotKey.isEmpty
@@ -614,6 +624,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(imageWidth, forKey: .imageWidth)
         try c.encodeIfPresent(imageHeight, forKey: .imageHeight)
         try c.encode(logicalShotIdentity, forKey: .logicalShotIdentity)
+        try c.encodeIfPresent(ShotMetadata.trimmedNonEmpty(trade), forKey: .trade)
+        try c.encodeIfPresent(ShotMetadata.normalizedPriority(priority), forKey: .priority)
     }
 
     static func makeShotKey(building: String, elevation: String, detailType: String, angleIndex: Int) -> String {
@@ -654,6 +666,22 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
             return parsed
         }
         return nil
+    }
+
+    private static func normalizedPriority(_ value: String?) -> String? {
+        let trimmed = trimmedNonEmpty(value)
+        switch trimmed?.lowercased() {
+        case "low":
+            return "Low"
+        case "medium":
+            return "Medium"
+        case "high":
+            return "High"
+        case "critical":
+            return "Critical"
+        default:
+            return nil
+        }
     }
 }
 
@@ -1213,6 +1241,7 @@ struct Observation: Codable, Identifiable, Equatable {
     var building: String?
     var targetElevation: String?
     var detailType: String?
+    var priority: String?
     var currentReason: String?
     var previousReason: String?
     var historyEvents: [ObservationHistoryEvent]
@@ -1237,6 +1266,7 @@ struct Observation: Codable, Identifiable, Equatable {
         building: String? = nil,
         targetElevation: String? = nil,
         detailType: String? = nil,
+        priority: String? = nil,
         currentReason: String? = nil,
         previousReason: String? = nil,
         historyEvents: [ObservationHistoryEvent] = [],
@@ -1260,6 +1290,7 @@ struct Observation: Codable, Identifiable, Equatable {
         self.building = building
         self.targetElevation = targetElevation
         self.detailType = detailType
+        self.priority = Observation.normalizedPriority(priority)
         self.currentReason = Observation.trimmedNonEmpty(currentReason)
         self.previousReason = Observation.trimmedNonEmpty(previousReason)
         self.historyEvents = historyEvents.sorted { $0.timestamp < $1.timestamp }
@@ -1285,6 +1316,7 @@ struct Observation: Codable, Identifiable, Equatable {
         case building
         case targetElevation
         case detailType
+        case priority
         case currentReason
         case previousReason
         case historyEvents
@@ -1311,6 +1343,7 @@ struct Observation: Codable, Identifiable, Equatable {
         building = try c.decodeIfPresent(String.self, forKey: .building)
         targetElevation = CanonicalElevation.normalize(try c.decodeIfPresent(String.self, forKey: .targetElevation))
         detailType = try c.decodeIfPresent(String.self, forKey: .detailType)
+        priority = Observation.normalizedPriority(try c.decodeIfPresent(String.self, forKey: .priority))
         let decodedNote = try c.decodeIfPresent(String.self, forKey: .note)
         currentReason = Observation.trimmedNonEmpty(
             try c.decodeIfPresent(String.self, forKey: .currentReason)
@@ -1346,6 +1379,7 @@ struct Observation: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(building, forKey: .building)
         try c.encodeIfPresent(CanonicalElevation.normalize(targetElevation), forKey: .targetElevation)
         try c.encodeIfPresent(detailType, forKey: .detailType)
+        try c.encodeIfPresent(Observation.normalizedPriority(priority), forKey: .priority)
         try c.encodeIfPresent(Observation.trimmedNonEmpty(currentReason), forKey: .currentReason)
         try c.encodeIfPresent(Observation.trimmedNonEmpty(previousReason), forKey: .previousReason)
         try c.encode(historyEvents.sorted { $0.timestamp < $1.timestamp }, forKey: .historyEvents)
@@ -1362,6 +1396,22 @@ struct Observation: Codable, Identifiable, Equatable {
 
     static func inferredCurrentReason(note: String?, statement: String) -> String? {
         trimmedNonEmpty(note) ?? trimmedNonEmpty(statement)
+    }
+
+    private static func normalizedPriority(_ value: String?) -> String? {
+        let trimmed = trimmedNonEmpty(value)
+        switch trimmed?.lowercased() {
+        case "low":
+            return "Low"
+        case "medium":
+            return "Medium"
+        case "high":
+            return "High"
+        case "critical":
+            return "Critical"
+        default:
+            return nil
+        }
     }
 
     private static func legacyHistoryEvents(

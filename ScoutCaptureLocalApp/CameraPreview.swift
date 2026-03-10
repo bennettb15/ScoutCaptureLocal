@@ -349,7 +349,9 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     @objc private func appDidBecomeActive() {
-        guard shouldResumeRunningOnActive else { return }
+        // Some lifecycle paths (for example screenshot transitions) can leave
+        // shouldResumeRunningOnActive stale while the session is actually stopped.
+        // Always attempt to ensure preview is running when we become active.
         ensurePreviewRunningAsync()
     }
     

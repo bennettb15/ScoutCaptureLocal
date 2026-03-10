@@ -351,6 +351,8 @@ final class ReportLibraryModel: ObservableObject {
         var elevation: String?
         var detailType: String?
         var angleIndex: Int?
+        var trade: String?
+        var priority: String? = nil
         var isGuided: Bool?
         var isFlagged: Bool?
         var issueStatus: String?
@@ -1020,7 +1022,9 @@ final class ReportLibraryModel: ObservableObject {
         let elevation = metadataContext.elevation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let detailType = metadataContext.detailType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let angle = metadataContext.angleIndex.map { "Angle \($0)" } ?? ""
-        let line2Parts = [building, elevation, detailType, angle].filter { !$0.isEmpty }
+        let trade = metadataContext.trade?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let priority = metadataContext.priority?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let line2Parts = [building, elevation, detailType, angle, trade, priority].filter { !$0.isEmpty }
         if !line2Parts.isEmpty {
             lines.append(line2Parts.joined(separator: " | "))
         }
@@ -1041,7 +1045,9 @@ final class ReportLibraryModel: ObservableObject {
             metadataContext.propertyName,
             metadataContext.building,
             metadataContext.elevation,
-            metadataContext.detailType
+            metadataContext.detailType,
+            metadataContext.trade,
+            metadataContext.priority
         ]
         for value in maybeValues {
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1102,6 +1108,8 @@ final class ReportLibraryModel: ObservableObject {
         put("schemaVersion", metadataContext.schemaVersion.map(String.init))
         put("issueStatus", metadataContext.issueStatus)
         put("issueNote", metadataContext.detailNote)
+        put("trade", metadataContext.trade)
+        put("priority", metadataContext.priority)
         put("captureDateLocal", captureTime.localDateTimeString)
         put("captureDateISO8601", captureTime.iso8601WithOffset)
         if let accuracy = metadataContext.accuracyMeters {
@@ -1150,6 +1158,8 @@ final class ReportLibraryModel: ObservableObject {
         setXMPTag(mutable, path: "scout:schemaVersion", value: metadataContext.schemaVersion.map(String.init))
         setXMPTag(mutable, path: "scout:issueStatus", value: metadataContext.issueStatus)
         setXMPTag(mutable, path: "scout:issueNote", value: metadataContext.detailNote)
+        setXMPTag(mutable, path: "scout:trade", value: metadataContext.trade)
+        setXMPTag(mutable, path: "scout:priority", value: metadataContext.priority)
         if let accuracy = metadataContext.accuracyMeters {
             setXMPTag(mutable, path: "scout:gpsAccuracyMeters", value: String(format: "%.3f", accuracy))
         }
@@ -2895,6 +2905,7 @@ private final class DetailTypesModel: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.colorScheme) private var colorScheme
     private let localStore = LocalStore()
     let onExitToHub: (() -> Void)?
     
@@ -2929,10 +2940,16 @@ struct ContentView: View {
     @State var locationMode: LocationMode = .exterior
     
     @State private var showQuickMenu: Bool = false
+    @State private var showMetadataFilterSheet: Bool = false
+    @State private var shouldReopenMetadataAfterManagerDismiss: Bool = false
     @State private var manageContext: ManageContext? = nil
     @State private var showManageBuildingsSheet: Bool = false
+    @State private var showManageTradesSheet: Bool = false
     @State private var buildingOptions: [String] = ["B1", "B2", "B3", "B4", "B5", "Add"]
+    @State private var tradeOptions: [String] = ContentView.defaultTradeOptions
     @State private var selectedBuilding: String = "B1"
+    @State private var selectedTrade: String = ""
+    @State private var selectedPriority: String = ""
     @State private var showActiveIssuesSheet: Bool = false
     @State private var activeObservations: [Observation] = []
     @State private var activeSessionShotIDs: Set<UUID> = []
@@ -2989,6 +3006,68 @@ struct ContentView: View {
     @State private var showLevel: Bool = false
 
     private let buildingOptionsDefaultsKey = "scout.capture.building.options.v1"
+    private let tradeOptionsDefaultsKey = "scout.capture.trade.options.v1"
+    private static let defaultTradeOptions: [String] = [
+        "Masonry",
+        "Roofing",
+        "Siding",
+        "Windows",
+        "Doors",
+        "Stucco",
+        "Foundation",
+        "Framing",
+        "Electrical",
+        "Plumbing",
+        "HVAC",
+        "Interior Finish"
+    ]
+    private static let priorityOptions: [String] = ["Low", "Medium", "High", "Critical"]
+
+    private static func normalizedPriority(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch trimmed.lowercased() {
+        case "low":
+            return "Low"
+        case "medium":
+            return "Medium"
+        case "high":
+            return "High"
+        case "critical":
+            return "Critical"
+        default:
+            return ""
+        }
+    }
+
+    private static func priorityColor(_ priority: String) -> Color {
+        switch normalizedPriority(priority) {
+        case "Critical":
+            return .red
+        case "High":
+            return .orange
+        case "Medium":
+            return .yellow
+        case "Low":
+            return .blue
+        default:
+            return .clear
+        }
+    }
+
+    private static func priorityShortLabel(_ priority: String?) -> String {
+        switch normalizedPriority(priority) {
+        case "Critical":
+            return "C"
+        case "High":
+            return "H"
+        case "Medium":
+            return "M"
+        case "Low":
+            return "L"
+        default:
+            return ""
+        }
+    }
 
     @State private var currentCaptureIntent: CaptureIntent = .free
 
@@ -2998,6 +3077,15 @@ struct ContentView: View {
         case retake(UUID)
         case free
     }
+
+    private enum PendingManageDestination {
+        case buildings
+        case interior
+        case exterior
+        case trades
+    }
+
+    @State private var pendingManageDestination: PendingManageDestination? = nil
 
     init(cameraManager: CameraManager = .shared, onExitToHub: (() -> Void)? = nil) {
         _camera = StateObject(wrappedValue: cameraManager)
@@ -3032,6 +3120,7 @@ struct ContentView: View {
     @State private var showSessionExportErrorPopup: Bool = false
     @State private var sessionExportErrorMessage: String? = nil
     @State private var didTriggerExitToHubForMissingSession: Bool = false
+    private var sheetTheme: SheetControlTheme { .forScheme(colorScheme) }
 
     private var headerPropertyName: String {
         let trimmed = appState.selectedProperty?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -3048,7 +3137,7 @@ struct ContentView: View {
         guard hasValidCurrentSession else { return false }
         let auth = AVCaptureDevice.authorizationStatus(for: .video)
         guard auth == .authorized else { return false }
-        return camera.isStartingPreview || !camera.isPreviewRunning
+        return camera.isStartingPreview
     }
 
     private var hasGuidedBaselineForSelectedProperty: Bool {
@@ -4280,6 +4369,38 @@ struct ContentView: View {
             UserDefaults.standard.set(data, forKey: buildingOptionsDefaultsKey)
         }
     }
+
+    private func loadTradeOptions() {
+        guard let data = UserDefaults.standard.data(forKey: tradeOptionsDefaultsKey),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+            return
+        }
+        let cleaned = decoded
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !cleaned.isEmpty {
+            tradeOptions = cleaned
+        }
+        if !selectedTrade.isEmpty,
+           tradeOptions.contains(selectedTrade) == false {
+            selectedTrade = ""
+        }
+    }
+
+    private func persistTradeOptions() {
+        let cleaned = tradeOptions
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let final = cleaned.isEmpty ? Self.defaultTradeOptions : cleaned
+        tradeOptions = final
+        if !selectedTrade.isEmpty,
+           tradeOptions.contains(selectedTrade) == false {
+            selectedTrade = ""
+        }
+        if let data = try? JSONEncoder().encode(final) {
+            UserDefaults.standard.set(data, forKey: tradeOptionsDefaultsKey)
+        }
+    }
     
     private func debugOverlayInline() -> some View {
         Group {
@@ -4608,6 +4729,12 @@ struct ContentView: View {
                             manageContext = ManageContext(mode: .exterior)
                         }
                     },
+                    onTrades: {
+                        showQuickMenu = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                            showManageTradesSheet = true
+                        }
+                    },
                     onFlash: { camera.cycleFlash() },
                     onCameraSwap: { swapCameraWithRotationFreeze() }
                 )
@@ -4617,8 +4744,24 @@ struct ContentView: View {
                     showQuickMenu = false
                 }
             }
+            .sheet(isPresented: $showMetadataFilterSheet) {
+                metadataFilterSheet
+            }
+            .sheet(isPresented: $showManageTradesSheet, onDismiss: {
+                persistTradeOptions()
+                reopenMetadataSheetAfterManagerDismissIfNeeded()
+            }) {
+                ManageTradesSheet(
+                    options: $tradeOptions,
+                    selectedTrade: $selectedTrade,
+                    onClose: {
+                        showManageTradesSheet = false
+                    }
+                )
+            }
             .sheet(isPresented: $showManageBuildingsSheet, onDismiss: {
                 persistBuildingOptions()
+                reopenMetadataSheetAfterManagerDismissIfNeeded()
             }) {
                 ManageBuildingsSheet(
                     options: $buildingOptions,
@@ -4641,7 +4784,9 @@ struct ContentView: View {
                     }
                 )
             }
-            .sheet(item: $manageContext) { ctx in
+            .sheet(item: $manageContext, onDismiss: {
+                reopenMetadataSheetAfterManagerDismissIfNeeded()
+            }) { ctx in
                 ManageDetailTypesView(mode: ctx.mode, model: detailTypesModel)
             }
             .fullScreenCover(isPresented: $showActiveIssuesSheet) {
@@ -4681,6 +4826,12 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .scoutClearLocalUICache)) { _ in
                 handleLocalCacheClearSignal()
             }
+            .onChange(of: showMetadataFilterSheet) { wasShown, isShown in
+                guard wasShown, !isShown else { return }
+                DispatchQueue.main.async {
+                    presentPendingManageDestinationIfNeeded()
+                }
+            }
     }
 
     @ViewBuilder
@@ -4697,11 +4848,19 @@ struct ContentView: View {
                     elevation: elevation,
                     detailType: currentDetailType,
                     existingNote: detailNote,
+                    isNoteEditable: !isArmedIssueDetailNoteReadOnly,
+                    tradeOptions: tradeOptions,
+                    priorityOptions: Self.priorityOptions,
+                    selectedTrade: $selectedTrade,
+                    selectedPriority: $selectedPriority,
                     onCancel: {
                         showDetailOverlay = false
                     },
                     onSave: { newValue in
                         detailNote = newValue
+                        if newValue.isEmpty {
+                            selectedPriority = ""
+                        }
                         showDetailOverlay = false
                     }
                 )
@@ -4725,6 +4884,7 @@ struct ContentView: View {
                     sessionID: appState.currentSession?.id
                 )
                 loadBuildingOptions()
+                loadTradeOptions()
                 refreshActiveIssues()
                 refreshGuidedShots()
                 isPollingDeviceOrientation = true
@@ -4929,7 +5089,7 @@ struct ContentView: View {
         let topInset: CGFloat = 30
 
         // Fine tune ONLY the internal content position.
-        let topContentLift: CGFloat = -22
+        let topContentLift: CGFloat = isLandscapeUI ? -14 : -14
 
         // Compact header height.
         let topBarH: CGFloat = topInset + 56
@@ -4957,217 +5117,394 @@ struct ContentView: View {
             Color.black
 
             let rowPadding: CGFloat = 16
-            let controlH: CGFloat = 44
-            let gap: CGFloat = 8
-            let titleFontSize: CGFloat = isLandscapeUI ? 25 : 30
-            let titleSideInset: CGFloat = isLandscapeUI ? 98 : 108
+            let titleFontSize: CGFloat = isLandscapeUI ? 38 : 34
+            let titleSideInset: CGFloat = isLandscapeUI ? 126 : 132
 
-            VStack(spacing: 10) {
+            VStack(spacing: isLandscapeUI ? 0 : 10) {
                 VStack(spacing: 2) {
-                    Text(headerPropertyName)
-                        .font(.system(size: titleFontSize, weight: .medium))
-                        .tracking(0.4)
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.54)
-                        .truncationMode(.tail)
-                        .padding(.horizontal, titleSideInset)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .overlay {
-                            HStack(spacing: 0) {
-                                if isLandscapeUI {
-                                    Button {
-                                        showLandscapeElevationMenu = false
-                                        showLandscapeDetailMenu = false
-                                        showLandscapeBuildingMenu.toggle()
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Text(selectedBuilding)
-                                                .font(.system(size: 15, weight: .medium))
-                                                .foregroundColor(.white.opacity(0.95))
-                                                .lineLimit(1)
-                                                .minimumScaleFactor(0.85)
-                                            Image(systemName: "chevron.down")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.white.opacity(0.90))
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .frame(height: controlH, alignment: .center)
-                                        .background(
-                                            ZStack {
-                                                Color.black.opacity(0.55)
-                                                Color.white.opacity(0.08)
-                                            }
-                                        )
-                                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 18)
-                                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                                        )
-                                        .rotationEffect(bottomGlyphRotationAngle)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(isCaptureTargetArmed)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .padding(.leading, rowPadding)
-                                }
+                    ZStack {
+                        Text(headerPropertyName)
+                            .font(.system(size: titleFontSize, weight: .medium))
+                            .tracking(0.4)
+                            .foregroundColor(.white.opacity(0.66))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.54)
+                            .truncationMode(.tail)
+                            .padding(.horizontal, titleSideInset)
+                            .frame(maxWidth: .infinity, alignment: .center)
 
-                                Spacer(minLength: 0)
-
-                                Button {
-                                    presentSessionActionsSheet()
-                                } label: {
-                                    Group {
-                                        if isLandscapeUI {
-                                            VStack(spacing: 0) {
-                                                Text("End")
-                                                Text("Session")
-                                            }
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .multilineTextAlignment(.center)
-                                        } else {
-                                            Text("End Session")
-                                                .font(.system(size: 16, weight: .semibold))
-                                        }
-                                    }
-                                    .foregroundColor(.red.opacity(0.95))
-                                    .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
-                                    .rotationEffect(isLandscapeUI ? bottomGlyphRotationAngle : .zero)
-                                }
-                                .buttonStyle(.plain)
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            endSessionControl()
                                 .padding(.trailing, rowPadding)
-                            }
                         }
+                    }
+                    .frame(height: isLandscapeUI ? 44 : nil)
                 }
 
-                if !(lastValidDeviceOrientation == .landscapeLeft || lastValidDeviceOrientation == .landscapeRight) {
-                    HStack(spacing: gap) {
-                        Button {
-                            showLandscapeElevationMenu = false
-                            showLandscapeDetailMenu = false
-                            showLandscapeBuildingMenu.toggle()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(selectedBuilding)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.95))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.85)
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.90))
-                            }
-                            .padding(.horizontal, 12)
-                            .frame(height: controlH, alignment: .center)
-                            .background(
-                                ZStack {
-                                    Color.black.opacity(0.55)
-                                    Color.white.opacity(0.08)
-                                }
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isCaptureTargetArmed)
-                        .fixedSize(horizontal: true, vertical: false)
-
-                        Button {
-                            showLandscapeBuildingMenu = false
-                            if locationMode == .interior {
-                                return
-                            }
-                            showLandscapeDetailMenu = false
-                            showLandscapeElevationMenu.toggle()
-                        } label: {
-                            let elevationLabel = elevationPillLabel()
-
-                            HStack(spacing: 8) {
-                                Text(elevationLabel)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.95))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.78)
-
-                                if shouldShowElevationAlignmentDot {
-                                    Circle()
-                                        .fill(isElevationHeadingAligned ? Color.green : Color.white)
-                                        .frame(width: 8, height: 8)
-                                        .allowsHitTesting(false)
-                                }
-
-                                Spacer(minLength: 0)
-
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.90))
-                            }
-                            .padding(.horizontal, 14)
-                            .frame(height: controlH, alignment: .center)
-                            .background(
-                                ZStack {
-                                    Color.black.opacity(0.55)
-                                    Color.white.opacity(0.08)
-                                }
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(locationMode == .interior || isCaptureTargetArmed)
-                        .fixedSize(horizontal: true, vertical: false)
-
-                        Button {
-                            showLandscapeBuildingMenu = false
-                            showLandscapeElevationMenu = false
-                            showLandscapeDetailMenu.toggle()
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text(currentDetailType.isEmpty ? "Select" : currentDetailType)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.95))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.78)
-
-                                Spacer(minLength: 0)
-
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.90))
-                            }
-                            .padding(.horizontal, 14)
-                            .frame(maxWidth: .infinity, minHeight: controlH, maxHeight: controlH, alignment: .center)
-                            .background(
-                                ZStack {
-                                    Color.black.opacity(0.55)
-                                    Color.white.opacity(0.08)
-                                }
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(isCaptureTargetArmed)
-                    }
-                    .padding(.horizontal, rowPadding)
+                if !isLandscapeUI {
+                    metadataHUDStrip(isLandscapeStyle: false)
+                        .padding(.horizontal, rowPadding)
+                        .offset(y: 3)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, topInset)
+            .padding(.top, isLandscapeUI ? 0 : topInset)
             .padding(.bottom, 0)
             .padding(.horizontal, 10)
-            .offset(y: topContentLift)
+            .offset(y: isLandscapeUI ? -8 : topContentLift)
         }
-        .frame(height: topBarH + (isLandscapeUI ? 0 : 6))
+        .frame(height: topBarH + 6)
+    }
+
+    private func metadataHUDStrip(isLandscapeStyle: Bool) -> some View {
+        let priorityBlue: Color = isLandscapeStyle
+            ? Color(red: 0.12, green: 0.66, blue: 1.0)
+            : .blue
+
+        let metadataText = HStack(spacing: 0) {
+            Text(selectedBuilding)
+                .shadow(
+                    color: .black.opacity(isLandscapeStyle ? 0.78 : 0.0),
+                    radius: isLandscapeStyle ? 1.4 : 0.0,
+                    x: 0,
+                    y: 0
+                )
+            separatorToken()
+            orientationToken()
+            separatorToken()
+            Text(shortShotTypeLabel(currentDetailType))
+                .font(.system(size: 15, weight: .heavy))
+                .foregroundColor(priorityBlue)
+                .shadow(
+                    color: .black.opacity(isLandscapeStyle ? 0.78 : 0.45),
+                    radius: isLandscapeStyle ? 1.4 : 0.8,
+                    x: 0,
+                    y: 0
+                )
+            separatorToken()
+            Text("A\(hudAngleIndex())")
+                .foregroundColor(.white.opacity(0.86))
+                .shadow(
+                    color: .black.opacity(isLandscapeStyle ? 0.78 : 0.0),
+                    radius: isLandscapeStyle ? 1.4 : 0.0,
+                    x: 0,
+                    y: 0
+                )
+            let tradeTrimmed = selectedTrade.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tradeTrimmed.isEmpty {
+                separatorToken()
+                Text(tradeTrimmed)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundColor(priorityBlue)
+                    .shadow(
+                        color: .black.opacity(isLandscapeStyle ? 0.78 : 0.45),
+                        radius: isLandscapeStyle ? 1.4 : 0.8,
+                        x: 0,
+                        y: 0
+                    )
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .minimumScaleFactor(0.76)
+        .layoutPriority(1)
+
+        let filterCircleSize: CGFloat = 18
+        let filterGlyphSize: CGFloat = 10
+        let filterGlyph = Image(systemName: "line.3.horizontal.decrease")
+            .font(.system(size: filterGlyphSize, weight: .semibold))
+            .foregroundColor(.white.opacity(0.82))
+            .frame(width: filterCircleSize, height: filterCircleSize, alignment: .center)
+            .background(
+                Circle()
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showMetadataFilterSheet = true
+            }
+
+        let tappableContent = HStack(spacing: 0) {
+            HStack(spacing: isLandscapeStyle ? 5 : 6) {
+                Color.clear
+                    .frame(width: filterCircleSize, height: filterCircleSize)
+                metadataText
+                    .padding(.trailing, isLandscapeStyle ? 4 : 6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showMetadataFilterSheet = true
+                    }
+                filterGlyph
+            }
+            .padding(.horizontal, isLandscapeStyle ? 6 : 8)
+        }
+
+        return HStack(spacing: 0) {
+            tappableContent
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .font(.system(size: 15, weight: .bold))
+        .foregroundColor(.white.opacity(0.97))
+        .padding(.horizontal, isLandscapeStyle ? 10 : 0)
+        .padding(.vertical, isLandscapeStyle ? 6 : 0)
+        .background {
+            if isLandscapeStyle {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.black.opacity(0.20))
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func separatorToken() -> some View {
+        Text(" | ")
+            .foregroundColor(.white.opacity(0.78))
+            .shadow(
+                color: .black.opacity(isLandscapeUI ? 0.78 : 0.0),
+                radius: isLandscapeUI ? 1.4 : 0.0,
+                x: 0,
+                y: 0
+            )
+    }
+
+    private func orientationToken() -> some View {
+        HStack(spacing: 3) {
+            Text(Self.shortElevationLabel(elevationPillLabel()))
+                .shadow(
+                    color: .black.opacity(isLandscapeUI ? 0.78 : 0.0),
+                    radius: isLandscapeUI ? 1.4 : 0.0,
+                    x: 0,
+                    y: 0
+                )
+            if locationMode == .exterior {
+                Circle()
+                    .fill(isElevationHeadingAligned ? Color.green : Color.white)
+                    .frame(width: 9, height: 9)
+            }
+        }
+    }
+
+    private func shortShotTypeLabel(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.caseInsensitiveCompare("General Elevation") == .orderedSame {
+            return "General"
+        }
+        return trimmed.isEmpty ? "Shot" : trimmed
+    }
+
+    private func metadataFilterButton(size: CGFloat) -> some View {
+        Button {
+            showMetadataFilterSheet = true
+        } label: {
+            Circle()
+                .fill(Color.black.opacity(0.48))
+                .frame(width: size, height: size)
+                .overlay(
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.system(size: proportionalCircleGlyphSize(for: size), weight: .medium))
+                        .foregroundColor(.white.opacity(0.92))
+                )
+        }
+        .buttonStyle(.plain)
+        .frame(width: size, height: size)
+    }
+
+    private func endSessionControl() -> some View {
+        Button {
+            presentSessionActionsSheet()
+        } label: {
+            Text("END")
+            .font(.system(size: 18, weight: .medium))
+            .multilineTextAlignment(.center)
+            .foregroundColor(.red.opacity(0.72))
+            .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
+            .rotationEffect(isLandscapeUI ? bottomGlyphRotationAngle : .zero)
+            .offset(y: 1.5)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func detailTypeSelectionBinding() -> Binding<String> {
+        Binding(
+            get: { detailTypesModel.selected(for: locationMode) },
+            set: { detailTypesModel.setSelected($0, for: locationMode) }
+        )
+    }
+
+    private var tradePickerOptions: [String] {
+        let current = selectedTrade.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || tradeOptions.contains(current) {
+            return tradeOptions
+        }
+        return tradeOptions + [current]
+    }
+
+    private func hudAngleIndex() -> Int {
+        if let retakeContext {
+            return max(1, retakeContext.angleIndex)
+        }
+        if let guidedID = armedGuidedShotID,
+           let guided = guidedShots.first(where: { $0.id == guidedID }) {
+            return max(1, guided.angleIndex ?? 1)
+        }
+        if let issueID = armedUpdateObservationID,
+           let angle = flaggedAngleIndexByID[issueID] {
+            return max(1, angle)
+        }
+        guard let propertyID = appState.selectedPropertyID else { return 1 }
+        return max(
+            1,
+            nextAngleIndexForCaptureContext(
+                propertyID: propertyID,
+                building: selectedBuilding,
+                elevation: elevation,
+                detailType: currentDetailType,
+                excludingShotID: UUID()
+            )
+        )
+    }
+
+    private var metadataFilterSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Metadata") {
+                    Picker(selection: $selectedBuilding) {
+                        ForEach(buildingOptions, id: \.self) { option in
+                            let optionCode = buildingCode(from: option)
+                            Text(buildingDisplayName(for: option)).tag(optionCode)
+                        }
+                    } label: {
+                        metadataFieldLabel("Building", manageDestination: .buildings)
+                    }
+
+                    if locationMode == .exterior {
+                        Picker(selection: $elevation) {
+                            Text("North").tag("North")
+                            Text("South").tag("South")
+                            Text("East").tag("East")
+                            Text("West").tag("West")
+                        } label: {
+                            metadataFieldLabel("Elevation", titleColor: .white)
+                        }
+                    }
+
+                    Picker(selection: detailTypeSelectionBinding()) {
+                        ForEach(detailTypesModel.types(for: locationMode)) { item in
+                            Text(shortShotTypeLabel(item.name)).tag(item.name)
+                        }
+                    } label: {
+                        metadataFieldLabel(
+                            "Detail Type",
+                            titleColor: .blue,
+                            manageDestination: locationMode == .interior ? .interior : .exterior
+                        )
+                    }
+
+                    Picker(selection: $selectedTrade) {
+                        Text("None").tag("")
+                        ForEach(tradePickerOptions, id: \.self) { option in
+                            Text(option).tag(option)
+                        }
+                    } label: {
+                        metadataFieldLabel("Trade", titleColor: .blue, manageDestination: .trades)
+                    }
+                }
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack(spacing: 10) {
+                    Color.clear
+                        .frame(width: 78, height: 42)
+
+                    Spacer(minLength: 0)
+
+                    Text("Filter")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    Button(action: {
+                        showMetadataFilterSheet = false
+                    }) {
+                        Text("Done")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundColor(sheetTheme.label)
+                            .frame(minHeight: 42)
+                            .padding(.horizontal, 14)
+                            .background(sheetTheme.fill)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(sheetTheme.stroke, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
+                .background(Color.clear)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func metadataFieldLabel(
+        _ title: String,
+        titleColor: Color = .primary,
+        manageDestination: PendingManageDestination? = nil
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundColor(titleColor)
+            if let manageDestination {
+                Button {
+                    beginManageListFlowFromMetadata(manageDestination)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.86))
+                }
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+            }
+        }
+    }
+
+    private func beginManageListFlowFromMetadata(_ destination: PendingManageDestination) {
+        shouldReopenMetadataAfterManagerDismiss = true
+        pendingManageDestination = destination
+        showMetadataFilterSheet = false
+    }
+
+    private func reopenMetadataSheetAfterManagerDismissIfNeeded() {
+        guard shouldReopenMetadataAfterManagerDismiss else { return }
+        shouldReopenMetadataAfterManagerDismiss = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            showMetadataFilterSheet = true
+        }
+    }
+
+    private func presentPendingManageDestinationIfNeeded() {
+        guard let destination = pendingManageDestination else { return }
+        pendingManageDestination = nil
+        switch destination {
+        case .buildings:
+            showManageBuildingsSheet = true
+        case .interior:
+            manageContext = ManageContext(mode: .interior)
+        case .exterior:
+            manageContext = ManageContext(mode: .exterior)
+        case .trades:
+            showManageTradesSheet = true
+        }
     }
 
     private func previewAreaView(w: CGFloat, previewH: CGFloat, baseToastTop: CGFloat) -> some View {
@@ -5203,6 +5540,11 @@ struct ContentView: View {
             .compositingGroup()
             .transaction { tx in
                 tx.animation = nil
+            }
+
+            if isLandscapeUI {
+                landscapeHeaderOverlay(w: w, previewH: previewH)
+                    .zIndex(82)
             }
 
             if showGrid {
@@ -5323,26 +5665,6 @@ struct ContentView: View {
                     .zIndex(86)
             }
 
-            if (lastValidDeviceOrientation == .landscapeLeft || lastValidDeviceOrientation == .landscapeRight) {
-                let isLandscapeLeft = (lastValidDeviceOrientation == .landscapeLeft)
-                let rotationDegrees: Double = isLandscapeLeft ? 90 : -90
-                let alignment: Alignment = isLandscapeLeft ? .topTrailing : .topLeading
-                let anchor: UnitPoint = isLandscapeLeft ? .topTrailing : .topLeading
-
-                Color.clear
-                    .frame(width: w, height: previewH)
-                    .overlay(alignment: alignment) {
-                        let xNudge: CGFloat = isLandscapeLeft ? -10 : 10
-                        let yNudge: CGFloat = 200
-
-                        landscapeDropdownStack()
-                            .rotationEffect(.degrees(rotationDegrees), anchor: anchor)
-                            .offset(x: xNudge, y: yNudge)
-                            .compositingGroup()
-                    }
-                    .zIndex(80)
-            }
-
             if showHDEnabledToast {
                 Text(hdEnabledToastText)
                     .font(.system(size: 14, weight: .medium))
@@ -5369,7 +5691,7 @@ struct ContentView: View {
                 let isLandscape = (lastValidDeviceOrientation == .landscapeLeft || lastValidDeviceOrientation == .landscapeRight)
 
                 if isLandscape {
-                    toastPill(text: detailNote)
+                    toastPill(text: detailNote, priority: selectedPriority)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .padding(.bottom, 96)
                         .padding(.horizontal, 18)
@@ -5380,7 +5702,7 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                         .zIndex(55)
                 } else {
-                    toastPill(text: detailNote)
+                    toastPill(text: detailNote, priority: selectedPriority)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, baseToastTop)
                         .padding(.horizontal, 18)
@@ -5496,7 +5818,10 @@ struct ContentView: View {
                 let isLandscape = (lastValidDeviceOrientation == .landscapeLeft || lastValidDeviceOrientation == .landscapeRight)
                 if isLandscape {
                     if !showGuidedAlignmentOverlay {
-                        toastPill(text: armedIssueNoteText.isEmpty ? "Flagged issue armed" : armedIssueNoteText)
+                        toastPill(
+                            text: armedIssueNoteText.isEmpty ? "Flagged issue armed" : armedIssueNoteText,
+                            priority: selectedPriority
+                        )
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             .padding(.bottom, 96)
                             .padding(.horizontal, 18)
@@ -5508,7 +5833,10 @@ struct ContentView: View {
                             .zIndex(26)
                     }
                 } else {
-                    toastPill(text: armedIssueNoteText.isEmpty ? "Flagged issue armed" : armedIssueNoteText)
+                    toastPill(
+                        text: armedIssueNoteText.isEmpty ? "Flagged issue armed" : armedIssueNoteText,
+                        priority: selectedPriority
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, baseToastTop)
                         .padding(.horizontal, 18)
@@ -5772,6 +6100,26 @@ struct ContentView: View {
         .onChange(of: showLevel) { _, newValue in
             if newValue { levelModel.start() } else { levelModel.stop() }
         }
+    }
+
+    @ViewBuilder
+    private func landscapeHeaderOverlay(w: CGFloat, previewH: CGFloat) -> some View {
+        let isLandscapeLeft = (lastValidDeviceOrientation == .landscapeLeft)
+        let rotation = Angle.degrees(isLandscapeLeft ? 90 : -90)
+        let sideInset: CGFloat = 22
+        let xOffset: CGFloat = isLandscapeLeft ? (w * 0.5 - sideInset) : -(w * 0.5 - sideInset)
+        let maxHudLength: CGFloat = max(220, previewH - 180)
+        let yOffset: CGFloat = 0
+
+        Color.clear
+            .frame(width: w, height: previewH)
+            .overlay(alignment: .center) {
+                metadataHUDStrip(isLandscapeStyle: true)
+                    .frame(maxWidth: maxHudLength)
+                    .rotationEffect(rotation)
+                    .offset(x: xOffset, y: yOffset)
+                .compositingGroup()
+            }
     }
 
     @ViewBuilder
@@ -6332,18 +6680,23 @@ extension ContentView {
             .padding(.horizontal, 12)
     }
     
-    private func toastPill(text: String) -> some View {
-        Text(text)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundColor(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.55))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-            )
+    private func toastPill(text: String, priority: String? = nil) -> some View {
+        let normalizedPriority = Self.normalizedPriority(priority)
+        return HStack(spacing: 8) {
+            if !normalizedPriority.isEmpty {
+                Circle()
+                    .fill(Self.priorityColor(normalizedPriority))
+                    .frame(width: 9, height: 9)
+            }
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     private struct HDQuickButton: View {
         let size: CGFloat
@@ -6436,6 +6789,7 @@ extension ContentView {
     private struct PopDetailNoteButton: View {
         let size: CGFloat
         let hasDetailNote: Bool
+        let selectedPriority: String
         let onHaptic: () -> Void
         let onTap: () -> Void
         
@@ -6459,9 +6813,14 @@ extension ContentView {
                 triggerPop()
                 onTap()
             }) {
+                let activeColor: Color = {
+                    guard hasDetailNote else { return Color.white.opacity(0.14) }
+                    let normalized = ContentView.normalizedPriority(selectedPriority)
+                    return normalized.isEmpty ? .blue : ContentView.priorityColor(normalized)
+                }()
                 ZStack {
                     Circle()
-                        .fill(hasDetailNote ? Color.blue : Color.white.opacity(0.14))
+                        .fill(activeColor)
                         .frame(width: size, height: size)
                     
                     Circle()
@@ -6495,11 +6854,11 @@ extension ContentView {
         PopDetailNoteButton(
             size: size,
             hasDetailNote: hasDetailNote,
+            selectedPriority: selectedPriority,
             onHaptic: {
                 fireQuickButtonHaptic()
             },
             onTap: {
-                guard !isArmedIssueDetailNoteReadOnly else { return }
                 if case .guided = currentCaptureIntent {
                     clearGuidedAndRetakeArming()
                     guidedReferenceAssetLocalID = nil
@@ -7176,6 +7535,21 @@ extension ContentView {
     
     private func capture() {
         let noteAtCapture = detailNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let priorityAtCapture = Self.normalizedPriority(selectedPriority)
+        let isFlaggedCaptureIntent: Bool = {
+            switch currentCaptureIntent {
+            case .flagged:
+                return true
+            case .retake:
+                return armedUpdateObservationID != nil
+            default:
+                return false
+            }
+        }()
+        if (!noteAtCapture.isEmpty || isFlaggedCaptureIntent) && priorityAtCapture.isEmpty {
+            showFlaggedActionToastNow("Priority is required for flagged capture")
+            return
+        }
         guard let propertyID = appState.selectedPropertyID,
               let sessionID = appState.currentSession?.id else { return }
         let captureDeviceOrientationAtShutter = stableDeviceOrientationForCaptureMetadata()
@@ -7287,6 +7661,8 @@ extension ContentView {
             )
             let captureLocation = locationManager.lastLocation
             let capturedExifOrientationRaw = capturedExifOrientationRawAtShutter
+            let captureTrade = selectedTrade.trimmingCharacters(in: .whitespacesAndNewlines)
+            let capturePriority = Self.normalizedPriority(selectedPriority)
             print("[SavePhoto] capture orientation device=\(captureDeviceOrientationAtShutter.rawValue) exifRaw=\(capturedExifOrientationRaw)")
             let captureMetadataContext = ReportLibraryModel.EmbeddedMetadataContext(
                 propertyID: propertyID,
@@ -7299,6 +7675,8 @@ extension ContentView {
                 elevation: normalizedElevation,
                 detailType: currentDetailType,
                 angleIndex: captureAngleIndex,
+                trade: captureTrade.isEmpty ? nil : captureTrade,
+                priority: capturePriority.isEmpty ? nil : capturePriority,
                 isGuided: nil,
                 isFlagged: nil,
                 issueStatus: nil,
@@ -7383,7 +7761,11 @@ extension ContentView {
                                         preferredAngleIndex: reservedAngleIndexAtCapture
                                     )
                                 } else {
-                                    createdObservationID = createObservationFromCapturedDetailNote(noteAtCapture, shot: shot)
+                                    createdObservationID = createObservationFromCapturedDetailNote(
+                                        noteAtCapture,
+                                        priority: capturePriority,
+                                        shot: shot
+                                    )
                                 }
                             }
                         }
@@ -7416,6 +7798,7 @@ extension ContentView {
                             isFlaggedHint: captureIsFlagged,
                             issueIDHint: createdObservationID ?? flaggedActionTargetObservation?.id,
                             createdFlaggedObservationID: createdObservationID,
+                            priorityAtCapture: capturePriority,
                             capturedExifOrientation: Int(capturedExifOrientationRawAtShutter),
                             reservedAngleIndexAtCapture: reservedAngleIndexAtCapture
                         )
@@ -7450,10 +7833,12 @@ extension ContentView {
         }
     }
 
-    private func createObservationFromCapturedDetailNote(_ noteText: String, shot: Shot) -> UUID? {
+    private func createObservationFromCapturedDetailNote(_ noteText: String, priority: String, shot: Shot) -> UUID? {
         guard !noteText.isEmpty else { return nil }
+        guard !Self.normalizedPriority(priority).isEmpty else { return nil }
         guard let propertyID = appState.selectedPropertyID else { return nil }
         let reason = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPriority = Self.normalizedPriority(priority)
 
         let observation = Observation(
             propertyID: propertyID,
@@ -7465,6 +7850,7 @@ extension ContentView {
             building: selectedBuilding,
             targetElevation: elevation,
             detailType: currentDetailType,
+            priority: normalizedPriority,
             currentReason: reason,
             historyEvents: [
                 ObservationHistoryEvent(
@@ -7491,6 +7877,7 @@ extension ContentView {
             refreshActiveIssues()
             refreshReferenceSetsAndPendingCounts()
             detailNote = ""
+            selectedPriority = ""
             isArmedIssueDetailNoteReadOnly = false
             setCaptureIntent(.free)
             return created.id
@@ -7512,6 +7899,7 @@ extension ContentView {
         isFlaggedHint: Bool,
         issueIDHint: UUID?,
         createdFlaggedObservationID: UUID?,
+        priorityAtCapture: String,
         capturedExifOrientation: Int?,
         reservedAngleIndexAtCapture: Int?
     ) {
@@ -7530,9 +7918,11 @@ extension ContentView {
         var isFlagged = isFlaggedHint
         var issueID = issueIDHint
         var issueStatus: String?
+        var priorityValue = Self.normalizedPriority(priorityAtCapture)
         var captureKind: String?
         var firstCaptureKind: String?
         var noteValue = noteText.isEmpty ? nil : noteText
+        let tradeValue = selectedTrade.trimmingCharacters(in: .whitespacesAndNewlines)
         var hasLockedAngleIndex = false
         if let reservedAngleIndexAtCapture {
             angleIndexValue = max(1, reservedAngleIndexAtCapture)
@@ -7573,6 +7963,9 @@ extension ContentView {
            }) {
             isFlagged = true
             issueID = observation.id
+            if let observationPriority = observation.priority {
+                priorityValue = Self.normalizedPriority(observationPriority)
+            }
             let isNewFlaggedIssueCapture = createdFlaggedObservationID == observation.id
             if observation.status == .resolved || observation.resolvedInSessionID == session.id {
                 issueStatus = "resolved"
@@ -7666,6 +8059,8 @@ extension ContentView {
             elevation: normalizedElevation,
             detailType: detailTypeValue,
             angleIndex: max(1, angleIndexValue),
+            trade: tradeValue.isEmpty ? nil : tradeValue,
+            priority: (isFlagged && !priorityValue.isEmpty) ? priorityValue : nil,
             shotKey: shotKey,
             isGuided: isGuided,
             isFlagged: isFlagged,
@@ -9673,6 +10068,8 @@ extension ContentView {
             elevation: shot.elevation,
             detailType: shot.detailType,
             angleIndex: shot.angleIndex,
+            trade: shot.trade,
+            priority: shot.priority,
             isGuided: shot.isGuided,
             isFlagged: shot.isFlagged,
             issueStatus: shot.issueStatus,
@@ -9730,6 +10127,8 @@ extension ContentView {
         append("captureMode", metadataContext.captureMode)
         append("lens", metadataContext.lens)
         append("orientation", metadataContext.orientation)
+        append("trade", metadataContext.trade)
+        append("priority", metadataContext.priority)
         append("captureDateLocal", captureTime.localDateTimeString)
         append("captureDateISO8601", captureTime.iso8601WithOffset)
         if let accuracy = metadataContext.accuracyMeters {
@@ -9744,7 +10143,9 @@ extension ContentView {
             metadataContext.propertyName,
             metadataContext.building,
             metadataContext.elevation,
-            metadataContext.detailType
+            metadataContext.detailType,
+            metadataContext.trade,
+            metadataContext.priority
         ]
         for value in values {
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -9846,6 +10247,8 @@ extension ContentView {
         setTag("scout:schemaVersion", metadataContext.schemaVersion.map(String.init))
         setTag("scout:issueStatus", metadataContext.issueStatus)
         setTag("scout:issueNote", metadataContext.detailNote)
+        setTag("scout:trade", metadataContext.trade)
+        setTag("scout:priority", metadataContext.priority)
         if let accuracy = metadataContext.accuracyMeters {
             setTag("scout:gpsAccuracyMeters", String(format: "%.3f", accuracy))
         }
@@ -10331,6 +10734,7 @@ extension ContentView {
         resetResolutionCapturePreview()
         isArmedIssueDetailNoteReadOnly = false
         detailNote = ""
+        selectedPriority = ""
     }
 
     private func resetSelectionForSwitch() {
@@ -10349,6 +10753,7 @@ extension ContentView {
         currentCaptureIntent = .free
         isArmedIssueDetailNoteReadOnly = false
         detailNote = ""
+        selectedPriority = ""
     }
 
     private func cancelArmedIssueCapture() {
@@ -10357,6 +10762,7 @@ extension ContentView {
         currentCaptureIntent = .free
         isArmedIssueDetailNoteReadOnly = false
         detailNote = ""
+        selectedPriority = ""
     }
 
     private func finalizeArmedIssueCaptureAfterDecision() {
@@ -10365,6 +10771,7 @@ extension ContentView {
         currentCaptureIntent = .free
         isArmedIssueDetailNoteReadOnly = false
         detailNote = ""
+        selectedPriority = ""
     }
 
     private func beginFlaggedIssueInteraction(_ observation: Observation) {
@@ -10402,6 +10809,7 @@ extension ContentView {
         }
         armedIssueNoteText = Self.observationCurrentReasonText(observation) ?? ""
         detailNote = armedIssueNoteText
+        selectedPriority = Self.normalizedPriority(observation.priority)
         isArmedIssueDetailNoteReadOnly = true
         if let referencePath = flaggedReferencePathByID[observation.id],
            !referencePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -10468,6 +10876,12 @@ extension ContentView {
 
             var updated = existing
             updated.status = .resolved
+            if updated.priority?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                let normalizedPriority = Self.normalizedPriority(selectedPriority)
+                if !normalizedPriority.isEmpty {
+                    updated.priority = normalizedPriority
+                }
+            }
             updated.linkedShotID = shot.id
             upsertShot(shot, in: &updated)
             updated.resolutionPhotoRef = pendingFlaggedDecisionPhotoRef ?? shot.imageLocalIdentifier
@@ -10529,6 +10943,12 @@ extension ContentView {
             }
             if updated.detailType?.isEmpty ?? true {
                 updated.detailType = currentDetailType
+            }
+            if updated.priority?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+                let normalizedPriority = Self.normalizedPriority(selectedPriority)
+                if !normalizedPriority.isEmpty {
+                    updated.priority = normalizedPriority
+                }
             }
             appendObservationHistoryEvent(
                 ObservationHistoryEvent(
@@ -10837,6 +11257,7 @@ extension ContentView {
         armedIssueRevisedObservationText = revisedObservationText?.trimmingCharacters(in: .whitespacesAndNewlines)
         armedIssueNoteText = Self.observationCurrentReasonText(observation) ?? ""
         detailNote = armedIssueNoteText
+        selectedPriority = Self.normalizedPriority(observation.priority)
         isArmedIssueDetailNoteReadOnly = true
         if let resolvedFlaggedPath = flaggedResolvedThumbnailPathByID[observation.id],
            !resolvedFlaggedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -12885,6 +13306,11 @@ extension ContentView {
         let elevation: String
         let detailType: String
         let existingNote: String
+        let isNoteEditable: Bool
+        let tradeOptions: [String]
+        let priorityOptions: [String]
+        @Binding var selectedTrade: String
+        @Binding var selectedPriority: String
         
         let onCancel: () -> Void
         let onSave: (String) -> Void
@@ -12896,12 +13322,22 @@ extension ContentView {
             elevation: String,
             detailType: String,
             existingNote: String,
+            isNoteEditable: Bool,
+            tradeOptions: [String],
+            priorityOptions: [String],
+            selectedTrade: Binding<String>,
+            selectedPriority: Binding<String>,
             onCancel: @escaping () -> Void,
             onSave: @escaping (String) -> Void
         ) {
             self.elevation = elevation
             self.detailType = detailType
             self.existingNote = existingNote
+            self.isNoteEditable = isNoteEditable
+            self.tradeOptions = tradeOptions
+            self.priorityOptions = priorityOptions
+            self._selectedTrade = selectedTrade
+            self._selectedPriority = selectedPriority
             self.onCancel = onCancel
             self.onSave = onSave
             _draft = State(initialValue: existingNote)
@@ -12909,6 +13345,26 @@ extension ContentView {
         
         private var hasExistingNote: Bool {
             !existingNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        private var trimmedDraft: String {
+            draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private var needsPrioritySelection: Bool {
+            !trimmedDraft.isEmpty
+        }
+
+        private var hasValidPriority: Bool {
+            !ContentView.normalizedPriority(selectedPriority).isEmpty
+        }
+
+        private var canSave: Bool {
+            !needsPrioritySelection || hasValidPriority
+        }
+
+        private var fixedModalLift: CGFloat {
+            isNoteEditable ? 128 : 0
         }
         
         var body: some View {
@@ -12938,13 +13394,14 @@ extension ContentView {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .foregroundColor(.primary)
                             .focused($isFocused)
+                            .disabled(!isNoteEditable)
                             .submitLabel(.done)
                             .onSubmit {
-                                let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                                onSave(trimmed)
+                                guard canSave else { return }
+                                onSave(trimmedDraft)
                             }
                         
-                        if !draft.isEmpty {
+                        if !draft.isEmpty && isNoteEditable {
                             Button { draft = "" } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 18, weight: .medium))
@@ -12953,6 +13410,82 @@ extension ContentView {
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+
+                    HStack(spacing: 10) {
+                        Text("Priority")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.90))
+                            .frame(width: 62, alignment: .leading)
+
+                        Menu {
+                            ForEach(priorityOptions, id: \.self) { option in
+                                Button(option) {
+                                    selectedPriority = option
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                let normalizedPriority = ContentView.normalizedPriority(selectedPriority)
+                                if !normalizedPriority.isEmpty {
+                                    Circle()
+                                        .fill(ContentView.priorityColor(normalizedPriority))
+                                        .frame(width: 10, height: 10)
+                                }
+                                Text(normalizedPriority.isEmpty ? "Required" : normalizedPriority)
+                                    .foregroundColor(.white.opacity(normalizedPriority.isEmpty ? 0.75 : 0.95))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.72))
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: 42)
+                            .background(Color.white.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    HStack(spacing: 10) {
+                        Text("Trade")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.90))
+                            .frame(width: 62, alignment: .leading)
+
+                        Menu {
+                            Button("None") {
+                                selectedTrade = ""
+                            }
+                            ForEach(tradeOptions, id: \.self) { option in
+                                Button(option) {
+                                    selectedTrade = option
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(selectedTrade.isEmpty ? "Optional" : selectedTrade)
+                                    .foregroundColor(.white.opacity(selectedTrade.isEmpty ? 0.75 : 0.95))
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.72))
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: 42)
+                            .background(Color.white.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if needsPrioritySelection && !hasValidPriority {
+                        Text("Priority is required for flagged items.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.red.opacity(0.95))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     
                     HStack(spacing: 10) {
@@ -12978,24 +13511,25 @@ extension ContentView {
                         
                         Button(action: {
                             isFocused = false
-                            let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            onSave(trimmed)
+                            guard canSave else { return }
+                            onSave(trimmedDraft)
                         }) {
                             Text(hasExistingNote ? "Update" : "Save")
                                 .font(.system(size: 15, weight: .medium))
-                                .foregroundColor(.black)
+                                .foregroundColor(canSave ? .black : .black.opacity(0.45))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .background(Color.white.opacity(0.92))
+                        .background(Color.white.opacity(canSave ? 0.92 : 0.35))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color.black.opacity(0.10), lineWidth: 1)
                         )
                         .contentShape(Rectangle())
+                        .disabled(!canSave)
                     }
                 }
                 .padding(16)
@@ -13008,11 +13542,11 @@ extension ContentView {
                 .shadow(color: Color.black.opacity(0.45), radius: 16, x: 0, y: 10)
                 .padding(.horizontal, 18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .offset(y: 0)
+                .offset(y: -fixedModalLift)
             }
             .onAppear {
                 // Focus immediately
-                isFocused = true
+                isFocused = isNoteEditable
             }
             // Keep the popup centered. Do not let SwiftUI move the layout to avoid the keyboard.
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -14963,6 +15497,10 @@ extension ContentView {
                 ContentView.observationCurrentReasonText(observation) ?? "No reason"
             }
 
+            private var normalizedPriority: String {
+                ContentView.normalizedPriority(observation.priority)
+            }
+
             var body: some View {
                 HStack(spacing: 12) {
                     thumbnailView
@@ -14976,6 +15514,17 @@ extension ContentView {
                         Text(statusLabel)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(statusColor)
+
+                        if !normalizedPriority.isEmpty {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(ContentView.priorityColor(normalizedPriority))
+                                    .frame(width: 8, height: 8)
+                                Text(normalizedPriority)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.92))
+                            }
+                        }
 
                         Text("\(Text("Reason: ").font(.system(size: 12, weight: .semibold)))\(Text(reasonText).font(.system(size: 12, weight: .regular)))")
                             .foregroundColor(.white.opacity(0.86))
@@ -15647,6 +16196,7 @@ extension ContentView {
         let onBuildingList: () -> Void
         let onInteriorList: () -> Void
         let onExteriorList: () -> Void
+        let onTrades: () -> Void
         let onFlash: () -> Void
         
         // Pass the target camera: true = front, false = rear
@@ -15663,7 +16213,7 @@ extension ContentView {
                 
                 let rawBtnW = (contentW - (spacing * 2)) / 3.0
                 let btnW: CGFloat = rawBtnW.isFinite ? max(0, rawBtnW) : 0
-                let rawTopBtnW = (contentW - (spacing * 2)) / 3.0
+                let rawTopBtnW = (contentW - (spacing * 3)) / 4.0
                 let topBtnW: CGFloat = rawTopBtnW.isFinite ? max(0, rawTopBtnW) : 0
                 
                 let bottomInset: CGFloat = (btnW / 2.0) + (spacing / 2.0)
@@ -15706,6 +16256,17 @@ extension ContentView {
                                     selectedStyle: false,
                                     theme: theme,
                                     action: onExteriorList
+                                )
+                                .frame(width: topBtnW)
+
+                                QuickMenuButton(
+                                    glyphRotationAngle: glyphRotationAngle,
+                                    icon: "wrench.and.screwdriver",
+                                    title: "TRADES",
+                                    isSelected: false,
+                                    selectedStyle: false,
+                                    theme: theme,
+                                    action: onTrades
                                 )
                                 .frame(width: topBtnW)
                             }
@@ -15786,6 +16347,157 @@ extension ContentView {
                         .padding(.horizontal, 18)
                     }
                     .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+        }
+    }
+
+    private struct ManageTradesSheet: View {
+        @Environment(\.colorScheme) private var colorScheme
+        private var theme: SheetControlTheme { .forScheme(colorScheme) }
+        @State private var editModeState: EditMode = .inactive
+        @FocusState private var focusedIndex: Int?
+
+        @Binding var options: [String]
+        @Binding var selectedTrade: String
+        let onClose: () -> Void
+
+        var body: some View {
+            NavigationStack {
+                List {
+                    ForEach(Array(options.indices), id: \.self) { index in
+                        if editModeState == .active {
+                            TextField("Trade", text: Binding(
+                                get: {
+                                    guard options.indices.contains(index) else { return "" }
+                                    return options[index]
+                                },
+                                set: { newValue in
+                                    guard options.indices.contains(index) else { return }
+                                    options[index] = newValue
+                                }
+                            ))
+                            .focused($focusedIndex, equals: index)
+                            .submitLabel(.done)
+                        } else {
+                            let option = options[index]
+                            Button {
+                                selectedTrade = option
+                                onClose()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Text(option)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundColor(.primary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+
+                                    Spacer(minLength: 0)
+
+                                    if selectedTrade == option {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 14, weight: .medium))
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .onDelete { offsets in
+                        options.remove(atOffsets: offsets)
+                    }
+                    .onMove { source, destination in
+                        options.move(fromOffsets: source, toOffset: destination)
+                    }
+                }
+                .listStyle(.insetGrouped)
+                .environment(\.editMode, $editModeState)
+                .toolbar(.hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    HStack(spacing: 10) {
+                        Button(action: onClose) {
+                            Text("Done")
+                                .font(.system(size: 17, weight: .medium))
+                                .foregroundColor(theme.label)
+                                .frame(minHeight: 42)
+                                .padding(.horizontal, 14)
+                                .background(theme.fill)
+                                .clipShape(Capsule())
+                                .overlay(
+                                    Capsule()
+                                        .stroke(theme.stroke, lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer(minLength: 0)
+
+                        Text("Trades")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(theme.label)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 0)
+
+                        HStack(spacing: 0) {
+                            Button {
+                                if editModeState != .active { editModeState = .active }
+                                options.append("New Trade")
+                                focusedIndex = max(0, options.count - 1)
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 17, weight: .medium))
+                                    .foregroundColor(theme.label)
+                                    .frame(width: 44, height: 42)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                if editModeState == .active {
+                                    editModeState = .inactive
+                                    focusedIndex = nil
+                                } else {
+                                    editModeState = .active
+                                }
+                            } label: {
+                                Group {
+                                    if editModeState == .active {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 17, weight: .medium))
+                                    } else {
+                                        Text("Edit")
+                                            .font(.system(size: 17, weight: .medium))
+                                    }
+                                }
+                                .foregroundColor(theme.label)
+                                .frame(width: 72, height: 42)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(theme.fill)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(theme.stroke, lineWidth: 1)
+                        )
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
+                }
+                .onDisappear {
+                    let cleaned = options
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    options = cleaned.isEmpty ? ContentView.defaultTradeOptions : cleaned
+                    if !selectedTrade.isEmpty, options.contains(selectedTrade) == false {
+                        selectedTrade = ""
+                    }
                 }
             }
         }

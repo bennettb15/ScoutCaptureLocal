@@ -158,6 +158,9 @@ final class LocalStore {
                SessionMetadata.trimmedNonEmpty(shot.firstCaptureKind) != "captured" {
                 failures.append("flagged shotID \(shot.shotID.uuidString) has captureKind retake but firstCaptureKind is not captured")
             }
+            if SessionMetadata.trimmedNonEmpty(shot.priority) == nil {
+                failures.append("flagged shotID \(shot.shotID.uuidString) missing priority")
+            }
         }
         var logicalShotKeys = Set<String>()
         var duplicateLogicalShotIdentityCount = 0
@@ -388,7 +391,9 @@ final class LocalStore {
             "longitude",
             "lens",
             "original_filename",
-            "original_byte_size"
+            "original_byte_size",
+            "trade",
+            "priority"
         ]
 
         let property = currentProperty(for: metadata.propertyID)
@@ -420,7 +425,9 @@ final class LocalStore {
                 decimalString(shot.longitude),
                 shot.lens ?? "",
                 shot.originalFilename,
-                intString(shot.originalByteSize)
+                intString(shot.originalByteSize),
+                shot.trade ?? "",
+                shot.isFlagged ? (shot.priority ?? "") : ""
             ]
         }
 
@@ -550,7 +557,9 @@ final class LocalStore {
             "is_retired",
             "retired_at",
             "skip_reason",
-            "skip_session_id"
+            "skip_session_id",
+            "trade",
+            "priority"
         ]
 
         let property = currentProperty(for: metadata.propertyID)
@@ -558,6 +567,12 @@ final class LocalStore {
         let propertyCity = metadata.propertyCityAtCapture ?? property?.city ?? ""
         let propertyState = metadata.propertyStateAtCapture ?? property?.state ?? ""
         let propertyZip = metadata.propertyZipAtCapture ?? property?.zip ?? ""
+        let tradeByShotID = Dictionary(uniqueKeysWithValues: metadata.shots.map { ($0.shotID, $0.trade ?? "") })
+        let priorityByShotID = Dictionary(
+            uniqueKeysWithValues: metadata.shots.map { shot in
+                (shot.shotID, shot.isFlagged ? (shot.priority ?? "") : "")
+            }
+        )
         let rows = metadata.guidedShots.map { row in
             [
                 row.id.uuidString,
@@ -575,7 +590,9 @@ final class LocalStore {
                 boolString(row.isRetired),
                 iso8601String(row.retiredAt),
                 row.skipReason?.rawValue ?? "",
-                row.skipSessionID?.uuidString ?? ""
+                row.skipSessionID?.uuidString ?? "",
+                row.shot.flatMap { tradeByShotID[$0.id] } ?? "",
+                row.shot.flatMap { priorityByShotID[$0.id] } ?? ""
             ]
         }
 
@@ -902,6 +919,8 @@ final class LocalStore {
                 elevation: shot.elevation,
                 detailType: shot.detailType,
                 angleIndex: shot.angleIndex,
+                trade: shot.trade,
+                priority: shot.priority,
                 shotKey: shot.shotKey,
                 isGuided: shot.isGuided,
                 isFlagged: shot.isFlagged,
@@ -955,6 +974,8 @@ final class LocalStore {
                 elevation: shot.elevation,
                 detailType: shot.detailType,
                 angleIndex: shot.angleIndex,
+                trade: shot.trade,
+                priority: shot.priority,
                 shotKey: shot.shotKey,
                 isGuided: shot.isGuided,
                 isFlagged: shot.isFlagged,
@@ -1808,6 +1829,8 @@ final class LocalStore {
             elevation: CanonicalElevation.normalize(shot.elevation) ?? shot.elevation,
             detailType: shot.detailType,
             angleIndex: max(1, shot.angleIndex),
+            trade: shot.trade,
+            priority: shot.priority,
             shotKey: normalizedShotKey,
             isGuided: shot.isGuided,
             isFlagged: shot.isFlagged,

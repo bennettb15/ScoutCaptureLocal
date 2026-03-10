@@ -1768,6 +1768,8 @@ struct SessionHubView: View {
             elevation: shot.elevation,
             detailType: shot.detailType,
             angleIndex: shot.angleIndex,
+            trade: shot.trade,
+            priority: shot.priority,
             isGuided: shot.isGuided,
             isFlagged: shot.isFlagged,
             issueStatus: shot.issueStatus,
@@ -1825,6 +1827,8 @@ struct SessionHubView: View {
         append("captureMode", metadataContext.captureMode)
         append("lens", metadataContext.lens)
         append("orientation", metadataContext.orientation)
+        append("trade", metadataContext.trade)
+        append("priority", metadataContext.priority)
         append("captureDateLocal", captureTime.localDateTimeString)
         append("captureDateISO8601", captureTime.iso8601WithOffset)
         if let accuracy = metadataContext.accuracyMeters {
@@ -1839,7 +1843,9 @@ struct SessionHubView: View {
             metadataContext.propertyName,
             metadataContext.building,
             metadataContext.elevation,
-            metadataContext.detailType
+            metadataContext.detailType,
+            metadataContext.trade,
+            metadataContext.priority
         ]
         for value in values {
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1941,6 +1947,8 @@ struct SessionHubView: View {
         setTag("scout:schemaVersion", metadataContext.schemaVersion.map(String.init))
         setTag("scout:issueStatus", metadataContext.issueStatus)
         setTag("scout:issueNote", metadataContext.detailNote)
+        setTag("scout:trade", metadataContext.trade)
+        setTag("scout:priority", metadataContext.priority)
         if let accuracy = metadataContext.accuracyMeters {
             setTag("scout:gpsAccuracyMeters", String(format: "%.3f", accuracy))
         }
