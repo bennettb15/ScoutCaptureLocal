@@ -3095,6 +3095,7 @@ struct ContentView: View {
     @State private var showHDEnabledToast: Bool = false
     @State private var hdEnabledToastText: String = "HD Enabled"
     @State private var hdEnabledToastToken: Int = 0
+    @State private var stableZoomSelectionId: String = "1"
     
     // MARK: - Debug overlay
     
@@ -5218,7 +5219,7 @@ struct ContentView: View {
             .frame(width: filterCircleSize, height: filterCircleSize, alignment: .center)
             .background(
                 Circle()
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                    .fill(Color.white.opacity(0.14))
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -5318,8 +5319,8 @@ struct ContentView: View {
         Button {
             presentSessionActionsSheet()
         } label: {
-            Text("END")
-            .font(.system(size: 18, weight: .medium))
+            Text("End")
+            .font(.system(size: 17, weight: .medium))
             .multilineTextAlignment(.center)
             .foregroundColor(.red.opacity(0.72))
             .shadow(color: .black.opacity(0.45), radius: 2, x: 0, y: 1)
@@ -7235,9 +7236,18 @@ extension ContentView {
         
         let steps = displayedZoomSteps.isEmpty ? camera.zoomSteps : displayedZoomSteps
         let count = steps.count
+        let resolvedSelectionId: String = {
+            if steps.contains(where: { $0.id == stableZoomSelectionId }) {
+                return stableZoomSelectionId
+            }
+            if steps.contains(where: { $0.id == camera.selectedZoomId }) {
+                return camera.selectedZoomId
+            }
+            return steps.first?.id ?? "1"
+        }()
         
         let selectedIndex: Int = {
-            if let i = steps.firstIndex(where: { camera.isZoomSelected($0) }) { return i }
+            if let i = steps.firstIndex(where: { $0.id == resolvedSelectionId }) { return i }
             return 0
         }()
         
@@ -7256,7 +7266,7 @@ extension ContentView {
         
         return HStack(spacing: spacing) {
             ForEach(steps) { step in
-                let selected = camera.isZoomSelected(step)
+                let selected = (step.id == resolvedSelectionId)
                 let base = (step.label == "1") ? "1" : step.label
                 let label = selected ? "\(base)x" : base
                 
@@ -7264,6 +7274,12 @@ extension ContentView {
                     Text(label)
                         .font(.system(size: 15, weight: selected ? .semibold : .regular))
                         .foregroundColor(selected ? .white : Color.white.opacity(0.92))
+                        .shadow(
+                            color: selected ? .clear : Color.black.opacity(0.9),
+                            radius: selected ? 0 : 2.2,
+                            x: 0,
+                            y: selected ? 0 : 2
+                        )
                         .rotationEffect(bottomGlyphRotationAngle)
                         .frame(width: itemW, height: itemW)
                         .background(
@@ -7295,7 +7311,11 @@ extension ContentView {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .onAppear {
+            stableZoomSelectionId = camera.selectedZoomId
             syncDisplayedZoomSteps(immediate: true)
+        }
+        .onChange(of: camera.selectedZoomId) { _, newValue in
+            stableZoomSelectionId = newValue
         }
         .onChange(of: camera.zoomSteps) { _, _ in
             syncDisplayedZoomSteps(immediate: false)
@@ -7303,11 +7323,7 @@ extension ContentView {
     }
 
     private var zoomReflowAnimation: Animation {
-        Animation.interactiveSpring(
-            response: 0.34,
-            dampingFraction: 0.88,
-            blendDuration: 0.12
-        )
+        .easeOut(duration: 0.24)
     }
 
     private func syncDisplayedZoomSteps(immediate: Bool) {
